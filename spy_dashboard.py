@@ -5531,6 +5531,28 @@ def get_live_level_status():
         "available": True,
         "live_price": parse_float(displayed_price),
         "live_spy_price": parse_float(displayed_price),
+
+        # Main signal fields for Render /api/status
+        "prediction": (
+            latest.get("prediction")
+            or latest.get("spy_signal")
+            or latest.get("signal")
+            or latest.get("direction")
+            or banner
+            or "WAIT"
+        ),
+        "confidence": (
+            parse_float(latest.get("confidence"))
+            or parse_float(latest.get("total_confidence"))
+            or parse_float(latest.get("total_score"))
+            or 0
+        ),
+        "level_update_time": (
+            latest.get("level_update_time")
+            or live_status.get("level_update_time")
+            or "N/A"
+        ),
+
         "bull_trigger": parse_float(latest.get("bullish_trigger")),
         "bull_confirmation": parse_float(latest.get("bullish_confirmation")),
         "bull_breakout": parse_float(latest.get("bullish_breakout")),
