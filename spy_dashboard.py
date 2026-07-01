@@ -8489,7 +8489,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(page)))
         self.end_headers()
         self.write_response(page)
-     def do_POST(self):
+    def do_POST(self):
         parsed = urlsplit(self.path)
 
         if parsed.path != "/api/push-status":
