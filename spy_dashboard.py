@@ -8516,16 +8516,32 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 ZoneInfo("America/New_York")
             ).isoformat()
 
-            prediction_folder = os.path.dirname(PREDICTION_FILE)
-            if prediction_folder:
-                os.makedirs(prediction_folder, exist_ok=True)
+            target_files = []
 
-            temp_file = PREDICTION_FILE + ".tmp"
+            if "LIVE_STATUS_FILE" in globals():
+                target_files.append(LIVE_STATUS_FILE)
 
-            with open(temp_file, "w", encoding="utf-8") as file:
-                json.dump(payload, file, indent=2)
+            if "PREDICTION_FILE" in globals():
+                target_files.append(PREDICTION_FILE)
 
-            os.replace(temp_file, PREDICTION_FILE)
+            for target_file in dict.fromkeys(target_files):
+                target_folder = os.path.dirname(target_file)
+
+                if target_folder:
+                    os.makedirs(target_folder, exist_ok=True)
+
+                temp_file = target_file + ".tmp"
+
+                with open(temp_file, "w", encoding="utf-8") as file:
+                    json.dump(payload, file, indent=2)
+
+                os.replace(temp_file, target_file)
+
+            print(
+                "Dashboard push received:",
+                payload.get("current_spy_price"),
+                payload.get("last_update")
+            )
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

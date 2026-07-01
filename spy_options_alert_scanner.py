@@ -6,6 +6,7 @@ from collections import deque
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import requests
 import yfinance as yf
 
 
@@ -554,6 +555,45 @@ def percent_change(current_price, old_price):
 def ensure_log_dir():
     os.makedirs(LOG_DIR, exist_ok=True)
 
+SPY_DASHBOARD_PUSH_URL = os.environ.get("SPY_DASHBOARD_PUSH_URL", "")
+DASHBOARD_UPDATE_TOKEN = os.environ.get("DASHBOARD_UPDATE_TOKEN", "")
+
+def push_live_status_to_render():
+    if not SPY_DASHBOARD_PUSH_URL:
+        return
+
+    try:
+        if not os.path.exists(LIVE_STATUS_FILE):
+            print("Render push skipped: live status file not found yet.")
+            return
+
+        with open(LIVE_STATUS_FILE, "r", encoding="utf-8") as file:
+            payload = json.load(file)
+
+        headers = {
+            "Content-Type": "application/json",
+            "X-Dashboard-Token": DASHBOARD_UPDATE_TOKEN,
+        }
+
+        response = requests.post(
+            SPY_DASHBOARD_PUSH_URL,
+            json=payload,
+            headers=headers,
+            timeout=8,
+        )
+
+        if response.status_code == 200:
+            print("Render dashboard push OK")
+        else:
+            print(
+                "Render dashboard push failed:",
+                response.status_code,
+                response.text[:300],
+           )
+
+    except Exception as error:
+        print("Render dashboard push error:", error)
+
 
 def save_live_status(spy_price, now):
     ensure_log_dir()
@@ -569,6 +609,7 @@ def save_live_status(spy_price, now):
 
     os.replace(LIVE_STATUS_TEMP_FILE, LIVE_STATUS_FILE)
 
+    push_live_status_to_render()
 
 def save_scan_row(spy_price, spy_change_percent):
     ensure_log_dir()
