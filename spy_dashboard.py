@@ -8495,12 +8495,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    if HOST not in ("127.0.0.1", "localhost", "::1") and not DASHBOARD_PASSWORD:
-        raise RuntimeError(
-            "DASHBOARD_PASSWORD is required when the dashboard binds publicly."
-        )
+    HOST = os.environ.get("DASHBOARD_HOST", "0.0.0.0")
+    PORT = int(os.environ.get("PORT", "10000"))
 
     server = HTTPServer((HOST, PORT), DashboardHandler)
+
     print(f"SPY dashboard reading: {os.path.abspath(PREDICTION_FILE)}")
     print(f"Open: http://{HOST}:{PORT}")
     print(
