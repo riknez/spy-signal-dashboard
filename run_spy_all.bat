@@ -13,22 +13,6 @@ echo SCANNER + RENDER PUSH ONLY
 echo ==================================================
 echo.
 
-findstr /C:"YOUR-SPY-DASHBOARD" ".env" >nul 2>&1
-if %errorlevel%==0 (
-    echo ERROR: .env still has YOUR-SPY-DASHBOARD placeholder.
-    echo Fix SCANNER_STATUS_UPDATE_URL and DASHBOARD_UPDATE_URL first.
-    pause
-    exit /b
-)
-
-findstr /C:"latency-scanner-landing" ".env" >nul 2>&1
-if %errorlevel%==0 (
-    echo ERROR: .env still points to latency-scanner-landing.
-    echo SPY must push to scanner-signal-members /api/push-status.
-    pause
-    exit /b
-)
-
 if not exist "spy_options_alert_scanner.py" (
     echo ERROR: spy_options_alert_scanner.py not found in %cd%
     pause
@@ -46,6 +30,8 @@ start "SPY OPTIONS ALERT SCANNER" powershell -NoExit -ExecutionPolicy Bypass -Co
 start "SPY RENDER LIVE FEED PUSHER" powershell -NoExit -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '%~dp0'; py push_spy_status_to_landing.py"
 
 echo.
-echo Started SPY scanner and Render live-feed pusher.
+echo Started:
+echo - SPY options scanner
+echo - SPY Render live-feed pusher
 echo.
 pause

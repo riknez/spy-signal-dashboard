@@ -174,13 +174,38 @@ def build_payload():
         payload.setdefault(key, value)
 
     for key, value in scan.items():
+        payload.setdefault(key, value)
         payload.setdefault(f"scan_{key}", value)
 
     for key, value in breadth.items():
+        payload.setdefault(key, value)
         payload.setdefault(f"breadth_{key}", value)
 
     for key, value in engine.items():
+        payload.setdefault(key, value)
         payload.setdefault(f"engine_{key}", value)
+
+    # Render dashboard aliases.
+    # Local scanner uses bullish_/bearish_ names.
+    # Render status endpoint expects bull_/bear_ names.
+    alias_map = {
+        "bull_trigger": "bullish_trigger",
+        "bull_confirmation": "bullish_confirmation",
+        "bull_breakout": "bullish_breakout",
+        "bear_trigger": "bearish_trigger",
+        "bear_confirmation": "bearish_confirmation",
+        "bear_breakdown": "bearish_breakdown",
+        "live_price": "current_spy_price",
+        "live_spy_price": "current_spy_price",
+        "prediction": "spy_signal",
+        "total_score": "total_confidence",
+        "market_regime": "regime",
+    }
+
+    for render_key, local_key in alias_map.items():
+        value = payload.get(local_key)
+        if value not in ("", None, "N/A", "NA", "--"):
+            payload[render_key] = value
 
     return payload
 

@@ -8519,24 +8519,41 @@ class DashboardHandler(BaseHTTPRequestHandler):
             target_files = []
 
             if "LIVE_STATUS_FILE" in globals():
-                target_files.append(LIVE_STATUS_FILE)
-
-            if "PREDICTION_FILE" in globals():
-                target_files.append(PREDICTION_FILE)
-
-            for target_file in dict.fromkeys(target_files):
-                target_folder = os.path.dirname(target_file)
+                target_folder = os.path.dirname(LIVE_STATUS_FILE)
 
                 if target_folder:
                     os.makedirs(target_folder, exist_ok=True)
 
-                temp_file = target_file + ".tmp"
+                temp_file = LIVE_STATUS_FILE + ".tmp"
 
                 with open(temp_file, "w", encoding="utf-8") as file:
                     json.dump(payload, file, indent=2)
 
-                os.replace(temp_file, target_file)
+                os.replace(temp_file, LIVE_STATUS_FILE)
 
+            if "PREDICTION_FILE" in globals():
+                prediction_row = payload.get("latest_prediction")
+
+                if not isinstance(prediction_row, dict) or not prediction_row:
+                    prediction_row = {
+                        key: value
+                        for key, value in payload.items()
+                        if not isinstance(value, (dict, list))
+                    }
+
+                target_folder = os.path.dirname(PREDICTION_FILE)
+
+                if target_folder:
+                    os.makedirs(target_folder, exist_ok=True)
+
+                temp_file = PREDICTION_FILE + ".tmp"
+
+                with open(temp_file, "w", encoding="utf-8", newline="") as file:
+                    writer = csv.DictWriter(file, fieldnames=list(prediction_row.keys()))
+                    writer.writeheader()
+                    writer.writerow(prediction_row)
+
+                os.replace(temp_file, PREDICTION_FILE)
             print(
                 "Dashboard push received:",
                 payload.get("current_spy_price"),
