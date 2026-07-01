@@ -9,7 +9,7 @@ echo Folder: %cd%
 echo NO AUTO BUY
 echo NO AUTO SELL
 echo NO BROKER CONNECTION
-echo SCANNER + RENDER PUSH ONLY
+echo SCANNER + RENDER PUSH + TELEGRAM ONLY
 echo ==================================================
 echo.
 
@@ -25,13 +25,22 @@ if not exist "push_spy_status_to_landing.py" (
     exit /b
 )
 
+if not exist "telegram_spy_notifier.py" (
+    echo ERROR: telegram_spy_notifier.py not found in %cd%
+    pause
+    exit /b
+)
+
 start "SPY OPTIONS ALERT SCANNER" powershell -NoExit -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '%~dp0'; py spy_options_alert_scanner.py"
 
 start "SPY RENDER LIVE FEED PUSHER" powershell -NoExit -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '%~dp0'; py push_spy_status_to_landing.py"
+
+start "SPY TELEGRAM NOTIFIER" powershell -NoExit -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '%~dp0'; py telegram_spy_notifier.py"
 
 echo.
 echo Started:
 echo - SPY options scanner
 echo - SPY Render live-feed pusher
+echo - SPY Telegram notifier
 echo.
 pause
