@@ -8489,6 +8489,55 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(page)))
         self.end_headers()
         self.write_response(page)
+     def do_POST(self):
+        parsed = urlsplit(self.path)
+
+        if parsed.path != "/api/push-status":
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        expected_token = os.environ.get("DASHBOARD_UPDATE_TOKEN", "")
+        supplied_token = self.headers.get("X-Dashboard-Token", "")
+
+        if expected_token:
+            if not secrets.compare_digest(supplied_token, expected_token):
+                self.send_response(401)
+                self.end_headers()
+                self.wfile.write(b"Unauthorized")
+                return
+
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+            raw_body = self.rfile.read(content_length)
+            payload = json.loads(raw_body.decode("utf-8"))
+
+            payload["dashboard_received_at"] = datetime.now(
+                ZoneInfo("America/New_York")
+            ).isoformat()
+
+            prediction_folder = os.path.dirname(PREDICTION_FILE)
+            if prediction_folder:
+                os.makedirs(prediction_folder, exist_ok=True)
+
+            temp_file = PREDICTION_FILE + ".tmp"
+
+            with open(temp_file, "w", encoding="utf-8") as file:
+                json.dump(payload, file, indent=2)
+
+            os.replace(temp_file, PREDICTION_FILE)
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok": true}')
+
+        except Exception as error:
+            print("Dashboard push error:", error)
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"Dashboard push failed")
+
 
     def log_message(self, format_string, *args):
         return
