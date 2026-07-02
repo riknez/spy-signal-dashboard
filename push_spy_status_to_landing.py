@@ -14,6 +14,9 @@ PREDICTION_FILE = os.path.join(LOG_DIR, "spy_direction_predictions.csv")
 MARKET_BREADTH_FILE = os.path.join(LOG_DIR, "spy_market_breadth.csv")
 ENGINE_HEALTH_FILE = os.path.join(LOG_DIR, "spy_engine_health.csv")
 ALERTS_FILE = os.path.join(LOG_DIR, "spy_options_alerts.csv")
+ALERT_RESULTS_FILE = os.path.join(LOG_DIR, "spy_options_alert_results.csv")
+ACCURACY_FILE = os.path.join(LOG_DIR, "spy_options_a_plus_results.csv")
+PAPER_TRADES_FILE = os.path.join(LOG_DIR, "ai_paper_benchmark_trades.csv")
 LEVEL_HITS_FILE = os.path.join(LOG_DIR, "spy_level_hits.json")
 
 DEFAULT_UPDATE_URL = "https://YOUR-SPY-RENDER-URL.onrender.com/api/push-status"
@@ -68,7 +71,7 @@ def read_last_csv_row(path):
         return {}
 
 
-def read_recent_csv_rows(path, limit=25):
+def read_recent_csv_rows(path, limit=100):
     try:
         with open(path, "r", encoding="utf-8-sig", newline="") as file:
             rows = list(csv.DictReader(file))
@@ -76,7 +79,7 @@ def read_recent_csv_rows(path, limit=25):
         return rows[-limit:] if limit > 0 else []
     except FileNotFoundError:
         return []
-    except (OSError, csv.Error) as error:
+    except (OSError, UnicodeDecodeError, csv.Error) as error:
         print(f"Could not read CSV file {path}: {error}")
         return []
 
@@ -124,8 +127,13 @@ def build_payload():
     status = read_json_file(STATUS_FILE)
     scan = read_last_csv_row(SCAN_LOG_FILE)
     prediction = read_last_csv_row(PREDICTION_FILE)
-    breadth_rows = read_recent_csv_rows(MARKET_BREADTH_FILE)
-    engine_rows = read_recent_csv_rows(ENGINE_HEALTH_FILE)
+    breadth_rows = read_recent_csv_rows(MARKET_BREADTH_FILE, 25)
+    engine_rows = read_recent_csv_rows(ENGINE_HEALTH_FILE, 25)
+    prediction_history = read_recent_csv_rows(PREDICTION_FILE, 50)
+    alert_history = read_recent_csv_rows(ALERTS_FILE, 50)
+    alert_result_history = read_recent_csv_rows(ALERT_RESULTS_FILE, 50)
+    accuracy_history = read_recent_csv_rows(ACCURACY_FILE, 50)
+    paper_trade_history = read_recent_csv_rows(PAPER_TRADES_FILE, 50)
     breadth = breadth_rows[-1] if breadth_rows else {}
     engine = engine_rows[-1] if engine_rows else {}
     alert = read_last_csv_row(ALERTS_FILE)
@@ -200,6 +208,15 @@ def build_payload():
         "latest_engine_health": engine,
         "latest_market_breadth_rows": breadth_rows,
         "latest_engine_health_rows": engine_rows,
+        "latest_prediction_history": prediction_history,
+        "latest_alert_history": alert_history,
+        "latest_alert_result_history": alert_result_history,
+        "latest_accuracy_history": accuracy_history,
+        "latest_paper_trade_history": paper_trade_history,
+        "latest_prediction_history_count": len(prediction_history),
+        "latest_alert_history_count": len(alert_history),
+        "latest_alert_result_history_count": len(alert_result_history),
+        "latest_paper_trade_history_count": len(paper_trade_history),
         "latest_alert": alert,
         "latest_level_hits": level_hits,
     }

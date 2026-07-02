@@ -114,6 +114,7 @@ AI_BENCHMARK_CONTINUE_AFTER_PROFIT = os.getenv(
     "AI_BENCHMARK_CONTINUE_AFTER_PROFIT",
     ""
 ).strip().lower() in ("1", "true", "yes", "on")
+PAPER_RESEARCH_MODE = True
 AI_BENCHMARK_TRADE_HEADERS = (
     "time",
     "exit_time",
@@ -366,7 +367,16 @@ def read_live_status():
         "latest_engine_health": status.get("latest_engine_health"),
         "latest_market_breadth": status.get("latest_market_breadth"),
         "latest_engine_health_rows": status.get("latest_engine_health_rows"),
-        "latest_market_breadth_rows": status.get("latest_market_breadth_rows")
+        "latest_market_breadth_rows": status.get("latest_market_breadth_rows"),
+        "latest_prediction_history": status.get("latest_prediction_history"),
+        "latest_alert_history": status.get("latest_alert_history"),
+        "latest_alert_result_history": status.get("latest_alert_result_history"),
+        "latest_accuracy_history": status.get("latest_accuracy_history"),
+        "latest_paper_trade_history": status.get("latest_paper_trade_history"),
+        "latest_prediction_history_count": status.get("latest_prediction_history_count", 0),
+        "latest_alert_history_count": status.get("latest_alert_history_count", 0),
+        "latest_alert_result_history_count": status.get("latest_alert_result_history_count", 0),
+        "latest_paper_trade_history_count": status.get("latest_paper_trade_history_count", 0)
     }
 
 
@@ -798,6 +808,14 @@ def new_ai_benchmark_state(cycle=1, previous_cycle=None):
         "daily_status": "Waiting for setup",
         "continue_benchmark": AI_BENCHMARK_CONTINUE_AFTER_PROFIT,
         "last_event": "No paper trade yet.",
+        "paper_research_mode": PAPER_RESEARCH_MODE,
+        "paper_mode": "LIVE SESSION",
+        "paper_last_block_reason": "Blocked: no directional edge",
+        "paper_entry_rule_used": "None",
+        "paper_exit_rule_used": "Structure stop/target, opposite evidence, or session close",
+        "paper_last_evaluation_time": now.isoformat(),
+        "paper_trade_candidate_direction": None,
+        "paper_trade_candidate_confidence": 0,
         "max_equity": AI_BENCHMARK_STARTING_BALANCE,
         "max_drawdown": 0.0,
         "cycle_started_at": now.isoformat(),
@@ -991,40 +1009,46 @@ def get_ai_benchmark_box_biases(latest, prediction_rows, current_price):
     return trend_bias, market_bias
 
 
-def get_ai_benchmark_entry_permission(state, now, plan_available, data_stale):
+def get_ai_benchmark_entry_permission(
+    state,
+    now,
+    plan_available,
+    data_stale,
+    research_replay=False
+):
     daily = get_ai_benchmark_daily_stats(state)
     reason = None
     next_condition = "Wait for the next qualifying benchmark setup."
     minutes = now.hour * 60 + now.minute
     if data_stale:
-        reason = "Data is stale."
+        reason = "Blocked: stale data"
         next_condition = "Wait for the live feed to become current."
-    elif minutes < 9 * 60 + 30 or minutes >= 16 * 60:
-        reason = "Market is closed."
+    elif (minutes < 9 * 60 + 30 or minutes >= 16 * 60) and not research_replay:
+        reason = "Blocked: market closed"
         next_condition = "Wait for the regular trading session."
-    elif minutes >= 15 * 60 + 45:
-        reason = "No-new-trades time has started."
+    elif minutes >= 15 * 60 + 45 and not research_replay:
+        reason = "Blocked: no-new-trades time"
         next_condition = "Manage open paper positions only."
     elif state.get("open_position"):
-        reason = "A benchmark paper trade is already open."
+        reason = "Blocked: existing paper position"
         next_condition = "Wait for the open paper trade to close."
     elif daily["trades_today"] >= AI_BENCHMARK_DAILY_MAX_TRADES:
-        reason = "Daily maximum of 10 benchmark trades reached."
+        reason = "Blocked: max trades reached"
         next_condition = "Wait for the next trading day."
     elif daily["consecutive_losses_today"] >= 2:
-        reason = "Two consecutive benchmark losses reached."
+        reason = "Blocked: two consecutive paper losses"
         next_condition = "Daily benchmark is paused until the next trading day."
     elif daily["daily_pnl"] <= -AI_BENCHMARK_DAILY_STOP_AMOUNT:
-        reason = "Daily benchmark loss limit of -5% reached."
+        reason = "Blocked: daily paper loss limit reached"
         next_condition = "Daily benchmark is paused until the next trading day."
     elif (
         daily["daily_pnl"] >= AI_BENCHMARK_DAILY_STOP_AMOUNT
         and not state.get("continue_benchmark", AI_BENCHMARK_CONTINUE_AFTER_PROFIT)
     ):
-        reason = "Daily benchmark profit target of +5% reached."
+        reason = "Blocked: daily paper profit target reached"
         next_condition = "Enable continue benchmark mode or wait for the next trading day."
     elif not plan_available:
-        reason = "Spread/risk unavailable or no clear structure stop."
+        reason = "Blocked: missing stop level"
         next_condition = "Wait for a valid structure stop and target."
     return {
         **daily,
@@ -1051,7 +1075,7 @@ def get_ai_benchmark_entry_signal(decision, latest, data_stale, prediction_rows=
             "reason": "Data is stale.",
             "next_condition": "Wait for the live feed to become current."
         }
-    if latest.get("bearish_breakdown_extended"):
+    if latest.get("bearish_breakdown_extended") and not PAPER_RESEARCH_MODE:
         return {
             "direction": None,
             "bias": "Bearish",
@@ -1062,6 +1086,51 @@ def get_ai_benchmark_entry_signal(decision, latest, data_stale, prediction_rows=
 
     bullish_score = int(parse_float(decision.get("bullish_score")) or parse_float(latest.get("bullish_confluence_score")) or 0)
     bearish_score = int(parse_float(decision.get("bearish_score")) or parse_float(latest.get("bearish_confluence_score")) or 0)
+    scanner_signal = str(
+        latest.get("prediction")
+        or latest.get("trade_action")
+        or latest.get("direction")
+        or latest.get("signal")
+        or ""
+    ).upper()
+    scanner_confidence = parse_float(
+        latest.get("confidence")
+        or latest.get("total_confidence")
+        or latest.get("total_score")
+    ) or 0
+    mtf_signal = str(latest.get("mtf_overall_signal") or "").upper()
+    mtf_alignment = str(latest.get("mtf_alignment") or "").upper()
+    mtf_usable = not any(
+        label in mtf_alignment for label in ("STRONGLY MIXED", "CONFLICTING")
+    )
+    confluence_score = parse_float(latest.get("confluence_score")) or 0
+    latest_price = parse_float(latest.get("spy_price"))
+    bullish_trigger = parse_float(latest.get("bullish_trigger"))
+    bearish_trigger = parse_float(latest.get("bearish_trigger"))
+    confidence_call = scanner_signal == "CALL" and scanner_confidence >= 60
+    confidence_put = scanner_signal == "PUT" and scanner_confidence >= 60
+    mtf_call = mtf_signal == "CALL" and mtf_usable
+    mtf_put = mtf_signal == "PUT" and mtf_usable
+    trigger_call = (
+        latest_price is not None
+        and bullish_trigger is not None
+        and latest_price >= bullish_trigger
+    )
+    trigger_put = (
+        latest_price is not None
+        and bearish_trigger is not None
+        and latest_price <= bearish_trigger
+    )
+    confluence_call = confluence_score >= 5 and (
+        scanner_signal == "CALL"
+        or mtf_signal == "CALL"
+        or bullish_score > bearish_score
+    )
+    confluence_put = confluence_score >= 5 and (
+        scanner_signal == "PUT"
+        or mtf_signal == "PUT"
+        or bearish_score > bullish_score
+    )
     bull_level = level_states["debug"].get("last_hit_bull_level", 0) if level_states else last_hit_bull_level
     bear_level = level_states["debug"].get("last_hit_bear_level", 0) if level_states else last_hit_bear_level
     breakout_active = bull_level >= 3
@@ -1156,6 +1225,10 @@ def get_ai_benchmark_entry_signal(decision, latest, data_stale, prediction_rows=
         or bullish_momentum
         or bullish_box_agreement
         or strong_call_pressure
+        or confidence_call
+        or mtf_call
+        or trigger_call
+        or confluence_call
     )
     bearish_qualifies = (
         bearish_score >= 5
@@ -1163,6 +1236,10 @@ def get_ai_benchmark_entry_signal(decision, latest, data_stale, prediction_rows=
         or bearish_momentum
         or bearish_box_agreement
         or strong_put_pressure
+        or confidence_put
+        or mtf_put
+        or trigger_put
+        or confluence_put
     )
     if not bullish_qualifies and not bearish_qualifies:
         return {
@@ -1191,28 +1268,63 @@ def get_ai_benchmark_entry_signal(decision, latest, data_stale, prediction_rows=
     opposing = bearish_evidence if direction == "CALL" else bullish_evidence
     confidence = min(100, max(0, 50 + ((evidence - opposing) * 7)))
     reasons = []
+    entry_rules = []
     if direction == "CALL":
+        if confidence_call:
+            reasons.append(f"CALL confidence {scanner_confidence:.0f}%")
+            entry_rules.append("Directional confidence >= 60")
+        if confluence_call:
+            reasons.append(f"Confluence {confluence_score:.0f}")
+            entry_rules.append("Confluence >= 5 with CALL bias")
+        if mtf_call:
+            reasons.append(f"MTF CALL ({mtf_alignment or 'aligned'})")
+            entry_rules.append("MTF CALL alignment")
+        if trigger_call:
+            reasons.append("Bullish trigger hold")
+            entry_rules.append("Price held above bullish trigger")
         if breakout_active:
             reasons.append("Breakout")
+            entry_rules.append("Bullish breakout")
         if strong_call_pressure:
             reasons.append("Bullish pressure")
+            entry_rules.append("Bullish pressure dominance")
         if bullish_score >= 5:
             reasons.append(f"Bullish score {bullish_score}/11")
+            entry_rules.append("Bullish score >= 5")
         if bullish_momentum:
             reasons.append("Momentum + VWAP")
+            entry_rules.append("Bullish momentum above VWAP")
         if bullish_box_agreement:
             reasons.append("Trend box + market box")
+            entry_rules.append("Bullish trend/market box agreement")
     else:
+        if confidence_put:
+            reasons.append(f"PUT confidence {scanner_confidence:.0f}%")
+            entry_rules.append("Directional confidence >= 60")
+        if confluence_put:
+            reasons.append(f"Confluence {confluence_score:.0f}")
+            entry_rules.append("Confluence >= 5 with PUT bias")
+        if mtf_put:
+            reasons.append(f"MTF PUT ({mtf_alignment or 'aligned'})")
+            entry_rules.append("MTF PUT alignment")
+        if trigger_put:
+            reasons.append("Bearish trigger hold")
+            entry_rules.append("Price held below bearish trigger")
         if breakdown_active:
             reasons.append("Breakdown")
+            entry_rules.append("Bearish breakdown")
         if strong_put_pressure:
             reasons.append("Bearish pressure")
+            entry_rules.append("Bearish pressure dominance")
         if bearish_score >= 5:
             reasons.append(f"Bearish score {bearish_score}/11")
+            entry_rules.append("Bearish score >= 5")
         if bearish_momentum:
             reasons.append("Momentum + VWAP")
+            entry_rules.append("Bearish momentum below VWAP")
         if bearish_box_agreement:
             reasons.append("Trend box + market box")
+            entry_rules.append("Bearish trend/market box agreement")
 
     return {
         "direction": direction,
@@ -1220,6 +1332,7 @@ def get_ai_benchmark_entry_signal(decision, latest, data_stale, prediction_rows=
         "bias": "Bullish" if direction == "CALL" else "Bearish",
         "confidence": confidence,
         "reason": ", ".join(reasons) if reasons else "Directional evidence",
+        "entry_rule_used": "; ".join(dict.fromkeys(entry_rules)) or "Directional evidence",
         "next_condition": "Valid structure stop and available daily risk capacity."
     }
 
@@ -1357,6 +1470,9 @@ def update_ai_paper_benchmark(latest, decision, regime, trade_risk, current_pric
         state = load_ai_benchmark_state()
         changed = state_missing
         now = datetime.now(ZoneInfo("America/New_York"))
+        minutes = now.hour * 60 + now.minute
+        live_session = now.weekday() < 5 and 9 * 60 + 30 <= minutes < 16 * 60
+        paper_mode = "LIVE SESSION" if live_session else "RESEARCH REPLAY"
         entry_signal = get_ai_benchmark_entry_signal(
             decision,
             latest,
@@ -1368,15 +1484,26 @@ def update_ai_paper_benchmark(latest, decision, regime, trade_risk, current_pric
         state["benchmark_bias"] = entry_signal.get("bias", "Neutral")
         state["benchmark_confidence"] = entry_signal.get("confidence", 0)
         state["benchmark_entry_reason"] = entry_signal.get("reason", "Waiting for benchmark evidence.")
+        state["paper_research_mode"] = PAPER_RESEARCH_MODE
+        state["paper_mode"] = paper_mode
+        state["paper_last_evaluation_time"] = now.isoformat()
+        state["paper_trade_candidate_direction"] = entry_signal.get("direction")
+        state["paper_trade_candidate_confidence"] = entry_signal.get("confidence", 0)
+        state["paper_entry_rule_used"] = entry_signal.get("entry_rule_used", "None")
+        state.setdefault(
+            "paper_exit_rule_used",
+            "Structure stop/target, opposite evidence, or session close"
+        )
         if price is None or data_stale:
             daily = get_ai_benchmark_daily_stats(state)
             state.update(daily)
             state["daily_goal"] = "3-10"
             state["daily_status"] = "Paused - live data unavailable"
             state["reason_not_trading"] = (
-                "Live SPY price is unavailable."
-                if price is None else "Data is stale."
+                "Blocked: no valid SPY price"
+                if price is None else "Blocked: stale data"
             )
+            state["paper_last_block_reason"] = state["reason_not_trading"]
             state["next_condition_needed"] = "Wait for a current live SPY price feed."
             save_ai_benchmark_state(state)
             metrics = calculate_ai_benchmark_metrics(state)
@@ -1406,10 +1533,11 @@ def update_ai_paper_benchmark(latest, decision, regime, trade_risk, current_pric
                 exit_reason = "Structure target reached."
             elif entry_signal and entry_signal.get("direction") and entry_signal["direction"] != direction:
                 exit_reason = "Opposite benchmark evidence."
-            elif now.hour * 60 + now.minute >= 15 * 60 + 55:
+            elif paper_mode == "LIVE SESSION" and minutes >= 15 * 60 + 55:
                 exit_reason = "End-of-day close/manage-only rule."
             if exit_reason:
                 close_ai_benchmark_position(state, price, exit_reason)
+                state["paper_exit_rule_used"] = exit_reason
                 changed = True
 
         plan = (
@@ -1421,7 +1549,8 @@ def update_ai_paper_benchmark(latest, decision, regime, trade_risk, current_pric
             state,
             now,
             bool(plan) if entry_signal.get("direction") else True,
-            data_stale
+            data_stale,
+            PAPER_RESEARCH_MODE and paper_mode == "RESEARCH REPLAY"
         )
         state.update({
             "trades_today": permission["trades_today"],
@@ -1430,11 +1559,13 @@ def update_ai_paper_benchmark(latest, decision, regime, trade_risk, current_pric
         })
         if state.get("open_position"):
             state["daily_status"] = "Paper trade open"
-            state["reason_not_trading"] = "A benchmark paper trade is already open."
+            state["reason_not_trading"] = "Blocked: existing paper position"
+            state["paper_last_block_reason"] = state["reason_not_trading"]
             state["next_condition_needed"] = "Wait for the open paper trade to close."
         elif not permission["allowed"]:
             state["daily_status"] = "Paused"
             state["reason_not_trading"] = permission["reason"]
+            state["paper_last_block_reason"] = permission["reason"]
             state["next_condition_needed"] = permission["next_condition"]
         elif not entry_signal.get("direction"):
             state["daily_status"] = (
@@ -1442,7 +1573,12 @@ def update_ai_paper_benchmark(latest, decision, regime, trade_risk, current_pric
                 if permission["trades_today"] < AI_BENCHMARK_DAILY_MIN_TARGET
                 else "Watching for setup"
             )
-            state["reason_not_trading"] = entry_signal.get("reason", "No benchmark entry condition is active.")
+            state["reason_not_trading"] = (
+                "Blocked: confidence below research threshold"
+                if (parse_float(entry_signal.get("confidence")) or 0) < 60
+                else "Blocked: no directional edge"
+            )
+            state["paper_last_block_reason"] = state["reason_not_trading"]
             state["next_condition_needed"] = entry_signal.get(
                 "next_condition",
                 "Wait for the next qualifying benchmark setup."
@@ -1484,15 +1620,18 @@ def update_ai_paper_benchmark(latest, decision, regime, trade_risk, current_pric
                 state["last_event"] = f"Paper trade open: {entry_signal['direction']} ({entry_signal.get('reason')})"
                 state["daily_status"] = "Paper trade open"
                 state["reason_not_trading"] = ""
+                state["paper_last_block_reason"] = ""
                 state["next_condition_needed"] = "Monitor the structure stop and target."
                 changed = True
             elif signal_key == state.get("last_signal_key"):
                 state["daily_status"] = "Waiting for fresh setup window"
                 state["reason_not_trading"] = "This benchmark setup was already evaluated in the current time window."
+                state["paper_last_block_reason"] = "Blocked: setup already evaluated"
                 state["next_condition_needed"] = "Wait for a fresh three- or five-minute setup window."
             else:
                 state["daily_status"] = "Paused"
                 state["reason_not_trading"] = "Benchmark balance cannot support one synthetic contract."
+                state["paper_last_block_reason"] = "Blocked: insufficient paper balance"
                 state["next_condition_needed"] = "Wait for the next benchmark cycle."
 
         position = state.get("open_position")
@@ -1548,7 +1687,13 @@ def update_ai_paper_benchmark(latest, decision, regime, trade_risk, current_pric
             "trades_today",
             "benchmark_bias",
             "benchmark_confidence",
-            "benchmark_entry_reason"
+            "benchmark_entry_reason",
+            "paper_mode",
+            "paper_last_block_reason",
+            "paper_entry_rule_used",
+            "paper_last_evaluation_time",
+            "paper_trade_candidate_direction",
+            "paper_trade_candidate_confidence"
         ))
         if status_signature != state.get("last_status_signature"):
             state["last_status_signature"] = status_signature
@@ -4980,6 +5125,12 @@ def build_ai_paper_benchmark(benchmark):
     )
     profit_factor = parse_float(benchmark.get("profit_factor")) or 0
     no_trade_reason = benchmark.get("reason_not_trading") or "Waiting for the next qualifying setup."
+    paper_mode = benchmark.get("paper_mode") or "LIVE SESSION"
+    paper_mode_text = (
+        "RESEARCH REPLAY - Research replay / paper-only evaluation"
+        if paper_mode == "RESEARCH REPLAY"
+        else "LIVE SESSION"
+    )
     status_class = (
         "milestone" if "Milestone" in str(benchmark.get("status"))
         else "failed" if benchmark.get("status") == "Failed"
@@ -5027,6 +5178,11 @@ def build_ai_paper_benchmark(benchmark):
         <div><span>Benchmark Bias</span><strong>{escape_value(benchmark.get("benchmark_bias"))}</strong></div>
         <div><span>Benchmark Confidence</span><strong>{(parse_float(benchmark.get("benchmark_confidence")) or 0):.0f}%</strong></div>
         <div><span>Benchmark Entry Reason</span><strong>{escape_value(benchmark.get("benchmark_entry_reason"))}</strong></div>
+        <div><span>Paper Mode</span><strong>{escape_value(paper_mode_text)}</strong></div>
+        <div><span>Block Reason</span><strong>{escape_value(benchmark.get("paper_last_block_reason") or "None")}</strong></div>
+        <div><span>Entry Rule Used</span><strong>{escape_value(benchmark.get("paper_entry_rule_used") or "None")}</strong></div>
+        <div><span>Exit Rule Used</span><strong>{escape_value(benchmark.get("paper_exit_rule_used"))}</strong></div>
+        <div><span>Last Evaluation Time</span><strong>{escape_value(benchmark.get("paper_last_evaluation_time"))}</strong></div>
         <div><span>Trades Today</span><strong>{escape_value(benchmark.get("trades_today"))} / 10</strong></div>
         <div><span>Daily Goal</span><strong>{escape_value(benchmark.get("daily_goal") or "3-10")}</strong></div>
         <div><span>Daily Benchmark Status</span><strong>{escape_value(benchmark.get("daily_status"))}</strong></div>
@@ -5051,6 +5207,7 @@ def build_ai_paper_benchmark(benchmark):
         <div><span>Last Trade</span><strong>{escape_value(last_trade_text)}</strong></div>
         <div><span>Last Benchmark Event</span><strong>{escape_value(benchmark.get("last_event"))}</strong></div>
         <div><span>Reason Not Trading</span><strong>No benchmark trade because: {escape_value(no_trade_reason)}</strong></div>
+        <div><span>Why Not Trading</span><strong>{escape_value(benchmark.get("paper_last_block_reason") or no_trade_reason)}</strong></div>
         <div><span>Next Condition Needed</span><strong>{escape_value(benchmark.get("next_condition_needed"))}</strong></div>
       </div>
       <div class="benchmark-equity-panel">
@@ -5061,7 +5218,7 @@ def build_ai_paper_benchmark(benchmark):
         <summary>Benchmark model and safeguards</summary>
         <p>The benchmark uses its own educational entry model. A 5/11 side score, dominant 15-minute pressure, active breakout/breakdown, VWAP-aligned momentum, or Trend Box and Market Box agreement may open a paper trade even while the dashboard recommendation remains WAIT.</p>
         <p>It targets 3-10 paper trades when valid setups appear. It pauses at 10 trades, two consecutive losses, a -5% daily loss, or a +5% daily profit unless continue benchmark mode is enabled.</p>
-        <p>Extended candles, stale data, missing structure stops, closed-market periods, and the 3:45 PM ET no-new-trades period remain blocked. The visible dashboard recommendation and risk controls are unchanged.</p>
+        <p>Stale data, invalid prices, missing structure stops, an existing paper position, daily trade limits, and two consecutive paper losses remain blocked. Research replay may evaluate the latest scanner snapshot outside regular hours; the visible dashboard recommendation and risk controls are unchanged.</p>
         <p>The synthetic comparison starts each contract at $1.00 and applies a fixed 0.50 delta to SPY movement. Exits use structure stop, structure target, opposite confirmation, or the 3:55 PM ET manage-only rule.</p>
         <p>This mode evaluates scanner behavior only. It does not create recommendations, connect to a broker, or represent exact option pricing.</p>
       </details>
@@ -5210,6 +5367,123 @@ def build_alert_table(rows, pressure_windows=None):
         build_alert_pressure_windows(pressure_windows or [])
         + '<div class="table-wrap"><table>'
         f"<thead><tr>{header}</tr></thead>"
+        f"<tbody>{''.join(body_rows)}</tbody></table></div>"
+    )
+
+
+def select_dashboard_history(local_rows, live_status, pushed_field):
+    local_rows = [row for row in (local_rows or []) if isinstance(row, dict)]
+    pushed_rows = live_status.get(pushed_field) if live_status else None
+    pushed_rows = (
+        [row for row in pushed_rows if isinstance(row, dict)]
+        if isinstance(pushed_rows, list)
+        else []
+    )
+    server_mode = (
+        os.name != "nt"
+        or os.environ.get("RENDER", "").strip().lower() in {"1", "true", "yes"}
+    )
+    if server_mode and len(pushed_rows) > len(local_rows):
+        return pushed_rows
+    return local_rows or pushed_rows
+
+
+def build_recent_signal_history(rows):
+    if not rows:
+        return '<p class="empty">No prediction history received yet.</p>'
+
+    body_rows = []
+    for row in reversed(rows[-20:]):
+        decision = (
+            row.get("prediction")
+            or row.get("trade_action")
+            or row.get("decision")
+            or row.get("direction")
+            or row.get("signal")
+            or "WAIT"
+        )
+        reason = str(row.get("reason") or row.get("banner_reason") or "")
+        if len(reason) > 180:
+            reason = f"{reason[:177]}..."
+        body_rows.append(
+            "<tr>"
+            f"<td>{escape_value(row.get('time') or row.get('last_update'))}</td>"
+            f"<td><strong>{escape_value(decision)}</strong></td>"
+            f"<td>{escape_value(row.get('confidence') or row.get('total_confidence'))}%</td>"
+            f"<td>${escape_value(row.get('spy_price') or row.get('current_spy_price'))}</td>"
+            f"<td>{escape_value(reason)}</td>"
+            f"<td>{escape_value(row.get('a_plus_setup') or 'N/A')}</td>"
+            "</tr>"
+        )
+
+    return (
+        '<div class="table-wrap"><table>'
+        '<thead><tr><th>Time</th><th>Signal / Decision</th><th>Confidence</th>'
+        '<th>SPY Price</th><th>Reason Summary</th><th>A+ Setup</th></tr></thead>'
+        f"<tbody>{''.join(body_rows)}</tbody></table></div>"
+    )
+
+
+def build_recent_alert_history(alert_rows, result_rows):
+    if not alert_rows:
+        return '<p class="empty">No alert history received yet.</p>'
+
+    result_by_direction = {}
+    result_by_key = {}
+    for result_row in result_rows or []:
+        direction = str(
+            result_row.get("option_type") or result_row.get("direction") or ""
+        ).upper()
+        entry_price = parse_float(
+            result_row.get("entry_spy_price") or result_row.get("entry_price")
+        )
+        if direction:
+            result_by_direction[direction] = result_row
+            if entry_price is not None:
+                result_by_key[(direction, round(entry_price, 4))] = result_row
+
+    body_rows = []
+    for row in reversed(alert_rows[-20:]):
+        legacy_shifted = str(row.get("spy_price") or "").upper() in {"CALL", "PUT"}
+        direction = str(
+            row.get("spy_price")
+            if legacy_shifted
+            else row.get("option_type") or row.get("direction") or ""
+        ).upper()
+        if direction == "UP":
+            direction = "CALL"
+        elif direction == "DOWN":
+            direction = "PUT"
+        spy_price = parse_float(
+            row.get("confidence")
+            if legacy_shifted
+            else row.get("spy_price") or row.get("entry_spy_price") or row.get("entry_price")
+        )
+        display_price = row.get("confidence") if legacy_shifted else (
+            row.get("spy_price") or row.get("entry_spy_price")
+        )
+        display_move = row.get("reason") if legacy_shifted else (
+            row.get("spy_change_percent") or row.get("move_percent")
+        )
+        result_row = (
+            result_by_key.get((direction, round(spy_price, 4)))
+            if direction and spy_price is not None
+            else None
+        ) or result_by_direction.get(direction, {})
+        body_rows.append(
+            "<tr>"
+            f"<td>{escape_value(row.get('time'))}</td>"
+            f"<td><strong>{escape_value(direction or 'N/A')}</strong></td>"
+            f"<td>${escape_value(display_price)}</td>"
+            f"<td>{escape_value(display_move)}%</td>"
+            f"<td>{escape_value(result_row.get('result') or 'PENDING')}</td>"
+            "</tr>"
+        )
+
+    return (
+        '<div class="table-wrap"><table>'
+        '<thead><tr><th>Time</th><th>Direction</th><th>SPY Price</th>'
+        '<th>Move</th><th>Result</th></tr></thead>'
         f"<tbody>{''.join(body_rows)}</tbody></table></div>"
     )
 
@@ -5568,7 +5842,11 @@ def get_live_status_debug_fields(live_status):
         "feed_connected": live_status.get("feed_connected", False),
         "feed_status": live_status.get("feed_status", "DASHBOARD FEED DISCONNECTED"),
         "analysis_delayed": live_status.get("analysis_delayed", False),
-        "stale_reason": live_status.get("stale_reason", "")
+        "stale_reason": live_status.get("stale_reason", ""),
+        "latest_prediction_history_count": live_status.get("latest_prediction_history_count", 0),
+        "latest_alert_history_count": live_status.get("latest_alert_history_count", 0),
+        "latest_alert_result_history_count": live_status.get("latest_alert_result_history_count", 0),
+        "latest_paper_trade_history_count": live_status.get("latest_paper_trade_history_count", 0)
     }
 
 
@@ -5753,6 +6031,12 @@ def get_live_level_status():
         "pressure_bias": latest.get("dashboard_pressure_bias", "Mixed"),
         "trade_risk": trade_risk,
         "ai_paper_benchmark": benchmark,
+        "paper_research_mode": benchmark.get("paper_research_mode", PAPER_RESEARCH_MODE),
+        "paper_last_block_reason": benchmark.get("paper_last_block_reason", ""),
+        "paper_entry_rule_used": benchmark.get("paper_entry_rule_used", "None"),
+        "paper_last_evaluation_time": benchmark.get("paper_last_evaluation_time"),
+        "paper_trade_candidate_direction": benchmark.get("paper_trade_candidate_direction"),
+        "paper_trade_candidate_confidence": benchmark.get("paper_trade_candidate_confidence", 0),
         "daily_midpoint_source_suspicious": bool(
             last_daily_midpoint_analysis
             and last_daily_midpoint_analysis.get("suspicious")
@@ -5826,6 +6110,21 @@ def build_dashboard_content():
     a_plus_result_rows = read_a_plus_results()
     engine_rows = read_engine_health()
     breadth_row = read_market_breadth()
+    history_prediction_rows = select_dashboard_history(
+        rows,
+        live_status,
+        "latest_prediction_history"
+    )
+    history_alert_rows = select_dashboard_history(
+        alert_rows,
+        live_status,
+        "latest_alert_history"
+    )
+    history_result_rows = select_dashboard_history(
+        result_rows,
+        live_status,
+        "latest_alert_result_history"
+    )
     update_historical_market_archive(rows, alert_rows, result_rows)
     latest = dict(rows[-1]) if rows else None
 
@@ -5954,6 +6253,11 @@ def build_dashboard_content():
     support_resistance_section = build_support_resistance_details(latest)
     alert_table = build_alert_table(alert_rows, alert_pressure_windows)
     prediction_table = build_prediction_table(rows, alert_pressure_windows)
+    recent_signal_history = build_recent_signal_history(history_prediction_rows)
+    recent_alert_history = build_recent_alert_history(
+        history_alert_rows,
+        history_result_rows
+    )
     market_replay = build_market_replay_education(rows)
     historical_archive = build_historical_market_archive()
     intraday_midpoints = build_intraday_midpoints(rows, latest.get("spy_price") if latest else None)
@@ -6013,6 +6317,14 @@ def build_dashboard_content():
         f"<h2>Recent Predictions</h2>{prediction_table}"
         f"<h2>Recent Alerts</h2>{alert_table}"
     )
+    recent_signal_history_details = build_collapsible(
+        "Recent Signal History",
+        recent_signal_history
+    )
+    recent_alert_history_details = build_collapsible(
+        "Recent Alert History",
+        recent_alert_history
+    )
 
     return f"""
     {sticky_signal_summary}
@@ -6048,6 +6360,8 @@ def build_dashboard_content():
     {market_replay_details}
     {historical_archive_details}
     {ai_paper_benchmark}
+    {recent_signal_history_details}
+    {recent_alert_history_details}
     {logs_details}
     """
 
