@@ -761,6 +761,35 @@ def escape_value(value, fallback="N/A"):
     return html.escape(str(value))
 
 
+def shorten_display_text(text, limit=72):
+    text = str(text or "").strip()
+    if len(text) <= limit:
+        return text
+    trimmed = text[: limit - 3].rsplit(" ", 1)[0]
+    return f"{trimmed}..." if trimmed else f"{text[: limit - 3]}..."
+
+
+def format_trade_risk_headline(risk, reasons):
+    reason_text = " ".join(reasons).lower()
+    if risk == "NO TRADE":
+        if "choppy" in reason_text:
+            return "Choppy market. Wait for confirmation."
+        if "older than" in reason_text or "stale" in reason_text:
+            return "Stale feed. Stand aside."
+        if "volume" in reason_text:
+            return "Low volume. Avoid forcing trades."
+        if "stability" in reason_text:
+            return "Unstable signal. Wait for structure."
+        if "midday" in reason_text:
+            return "Midday chop. Be patient."
+        return "Conditions unclear. No trade."
+    if risk == "LOW RISK":
+        return "Cleaner setup. Confirm entry."
+    if risk == "HIGH RISK":
+        return "Elevated fakeout risk. Be selective."
+    return "Usable but not ideal. Size down."
+
+
 def parse_float(value):
     if isinstance(value, (int, float)):
         return float(value)
@@ -2568,16 +2597,20 @@ def build_trade_decision_meter(decision):
     )
     return f"""
     <section id="trade-decision-meter" class="trade-decision-meter {decision_class}">
+      <div class="card-label-row"><span>Confluence</span><strong>{decision["mode"]}</strong></div>
       <div class="decision-meter-scale">
         <span>Bearish</span><span>Neutral</span><span>Bullish</span>
         <div class="decision-meter-track"><i id="decision-meter-marker" style="left: {marker_position:.1f}%"></i></div>
       </div>
       <div class="decision-meter-scores">
-        <div>Bearish Score <strong id="decision-meter-bearish">{decision["bearish_score"]} / 11</strong></div>
-        <div>Neutral/Conflict <strong id="decision-meter-neutral">{decision["neutral_score"]} / 11</strong></div>
-        <div>Bullish Score <strong id="decision-meter-bullish">{decision["bullish_score"]} / 11</strong></div>
+        <div>Bearish <strong id="decision-meter-bearish">{decision["bearish_score"]} / 11</strong></div>
+        <div>Neutral <strong id="decision-meter-neutral">{decision["neutral_score"]} / 11</strong></div>
+        <div>Bullish <strong id="decision-meter-bullish">{decision["bullish_score"]} / 11</strong></div>
       </div>
-      <p><b>Reason:</b> <span id="decision-meter-reason">{escape_value(decision["reason"])}</span></p>
+      <details class="card-more-details">
+        <summary>Decision reason</summary>
+        <p class="detail-line"><span id="decision-meter-reason">{escape_value(decision["reason"])}</span></p>
+      </details>
     </section>
     """
 
@@ -2747,12 +2780,13 @@ def build_trade_risk_meter(latest, regime_data):
             reasons = ["conditions are usable but do not meet the cleanest setup criteria"]
 
     reason_items = "".join(f"<li>{escape_value(reason)}</li>" for reason in reasons)
+    risk_headline = format_trade_risk_headline(risk, reasons)
     return f"""
     <section class="trade-risk-meter {risk_class}">
       <div class="trade-risk-heading">
         <span>Trade Risk</span>
         <strong>{escape_value(risk)}</strong>
-        <p>{escape_value(lesson)}</p>
+        <p>{escape_value(risk_headline)}</p>
       </div>
       <div class="trade-risk-time">
         <span>{escape_value(time_window)}</span>
@@ -3362,17 +3396,21 @@ def build_compact_sticky_signal_summary(latest, regime_data, live_status, decisi
     warning_class = " visible" if feed_state != "live" else ""
     confidence = parse_float((latest or {}).get("confidence")) or 0
     reason = str(decision.get("reason") or "Waiting for confirmation.")
-    short_reason = f"{reason[:217]}..." if len(reason) > 220 else reason
+    short_reason = shorten_display_text(reason, 220)
     confirmation = (latest or {}).get("confirmation_needed") or "Wait for directional confirmation."
     invalidation = (latest or {}).get("invalidation_reason") or "No clean invalidation level yet."
+    vwap_position = (latest or {}).get("vwap_position") or "Mixed"
+    one_min_trend = (latest or {}).get("mtf_1m_status") or "Neutral"
+    feed_age_text = f"{feed_age:.0f}s ago" if feed_age is not None else "N/A"
+    update_age_text = f"{analysis_age:.0f}s ago" if analysis_age is not None else "N/A"
 
     def level_value(field):
         value = (latest or {}).get(field)
         return value if value not in (None, "") else "N/A"
 
     choppy_warning = (
-        '<div class="no-trade-warning"><strong>&#9888; NO TRADE ZONE</strong>'
-        '<p>Market is choppy. Wait for clean structure and confirmation.</p></div>'
+        '<div class="no-trade-warning"><strong>No trade zone</strong>'
+        '<span>Choppy market. Wait for confirmation.</span></div>'
         if regime.upper() == "CHOPPY" else ""
     )
     return f"""
@@ -3382,61 +3420,73 @@ def build_compact_sticky_signal_summary(latest, regime_data, live_status, decisi
           <div class="signal-hero-kicker">
             <span class="feed-dot {feed_state}"></span>
             <strong id="top-feed-status">{escape_value(feed_status)}</strong>
-            <span id="top-feed-age">Feed Age: {f"{feed_age:.0f} sec" if feed_age is not None else "N/A"}</span>
+            <span id="top-feed-age">{escape_value(feed_age_text)}</span>
+            <span>Updated <b id="top-last-updated">{escape_value(live_status.get("updated_at") if live_status else "N/A")}</b></span>
+            <span id="top-analysis-age">{escape_value(update_age_text)}</span>
+            <span class="visually-hidden">v<b id="top-dashboard-version">{escape_value(DASHBOARD_VERSION)}</b> / <b id="top-build-source">{escape_value(DASHBOARD_BUILD_SOURCE)}</b></span>
           </div>
           <h1>SPY Signal Dashboard</h1>
-          <p id="live-signal-reason">{escape_value(short_reason)}</p>
-          <div class="signal-hero-meta">
-            <span>Updated <b id="top-last-updated">{escape_value(live_status.get("updated_at") if live_status else "N/A")}</b></span>
-            <span id="top-analysis-age">Analysis Age: {f"{analysis_age:.0f} sec" if analysis_age is not None else "N/A"}</span>
-            <span>v<b id="top-dashboard-version">{escape_value(DASHBOARD_VERSION)}</b> / <b id="top-build-source">{escape_value(DASHBOARD_BUILD_SOURCE)}</b></span>
-          </div>
+          <p id="live-signal-reason" class="visually-hidden">{escape_value(short_reason)}</p>
         </div>
         <div class="signal-hero-stats">
+          <div id="live-signal-banner" class="hero-stat hero-signal hero-signal-primary {mode_class}">
+            <span>Current Signal</span>
+            <strong id="live-market-phase">{escape_value(mode)}</strong>
+          </div>
           <div class="hero-stat"><span>SPY Price</span><strong id="top-live-spy-price">{escape_value(live_price)}</strong></div>
-          <div id="live-signal-banner" class="hero-stat hero-signal {mode_class}"><span>Current Signal</span><strong id="live-market-phase">{escape_value(mode)}</strong></div>
           <div class="hero-stat"><span>Confidence</span><strong>{confidence:.0f}%</strong></div>
         </div>
       </div>
       <div id="top-trend-override-pill" class="trend-override-banner{" visible" if latest and latest.get("dashboard_trend_override") else ""}">{escape_value(latest.get("dashboard_trend_override_label") or "TREND OVERRIDE ACTIVE") if latest else "TREND OVERRIDE ACTIVE"}</div>
       <div id="top-stale-warning" class="data-stale-warning {feed_state}{warning_class}">{escape_value(feed_status)}</div>
     </section>
-    <div class="dashboard-primary-grid">
+    <div class="dashboard-primary-grid dashboard-row-two">
       <section id="signal-overview" class="overview-card signal-overview {mode_class}">
-        <div class="overview-heading"><span>Signal</span><strong class="signal-badge {mode_class}">{escape_value(mode)}</strong></div>
-        <div class="overview-grid">
-          <div><span>Market Regime</span><strong id="top-regime-pill">{escape_value(regime)}</strong></div>
-          <div><span>Current Advantage</span><strong id="top-advantage-pill">{escape_value(decision["advantage"])}</strong></div>
-          <div><span>Trade Risk</span><strong>{escape_value(trade_risk)}</strong></div>
-          <div><span>Stability</span><strong id="top-stability-pill">{escape_value(stability)}</strong></div>
-          <div><span>A+ Setup</span><strong id="top-a-plus-pill">{escape_value(decision["a_plus_setup"])}</strong></div>
-          <div><span>Confluence</span><strong id="top-score-pill">{score} / 11</strong><b id="top-score-compact" class="visually-hidden">{score} / 11</b></div>
+        <div class="overview-heading"><span>Signal Summary</span><strong class="signal-badge {mode_class}">{escape_value(mode)}</strong></div>
+        <div class="chip-row context-chips">
+          <span class="chip"><small>Regime</small><b id="top-regime-pill">{escape_value(regime)}</b></span>
+          <span class="chip"><small>Trade Risk</small><b>{escape_value(trade_risk)}</b></span>
+          <span class="chip"><small>Stability</small><b id="top-stability-pill">{escape_value(stability)}</b></span>
+          <span class="chip"><small>Advantage</small><b id="top-advantage-pill">{escape_value(decision["advantage"])}</b></span>
+          <span class="chip"><small>VWAP</small><b>{escape_value(vwap_position)}</b></span>
+          <span class="chip"><small>1-Min Trend</small><b>{escape_value(one_min_trend)}</b></span>
+          <span class="chip"><small>A+ Setup</small><b id="top-a-plus-pill">{escape_value(decision["a_plus_setup"])}</b></span>
+          <span class="chip"><small>Score</small><b id="top-score-pill">{score} / 11</b><b id="top-score-compact" class="visually-hidden">{score} / 11</b></span>
         </div>
         <p id="live-recommendation" class="overview-footnote">Phase: {escape_value(market_phase)}</p>
+        <details class="card-more-details">
+          <summary>Signal reason</summary>
+          <p class="detail-line">{escape_value(reason)}</p>
+        </details>
       </section>
       <section id="next-action-overview" class="overview-card next-action-card">
-        <div class="overview-heading"><span>Next Action</span><strong>What to wait for next</strong></div>
-        <div class="action-copy"><span>Confirmation needed</span><strong>{escape_value(confirmation)}</strong></div>
-        <div class="action-copy"><span>Invalidation</span><strong>{escape_value(invalidation)}</strong></div>
-        <div class="level-summary-row bullish"><span>Bullish path</span><strong>{escape_value(level_value("bullish_trigger"))} / {escape_value(level_value("bullish_confirmation"))} / {escape_value(level_value("bullish_breakout"))}</strong></div>
-        <div class="level-summary-row bearish"><span>Bearish path</span><strong>{escape_value(level_value("bearish_trigger"))} / {escape_value(level_value("bearish_confirmation"))} / {escape_value(level_value("bearish_breakdown"))}</strong></div>
+        <div class="overview-heading"><span>What Happens Next</span><strong>Key triggers</strong></div>
+        <div class="action-copy"><span>Confirmation</span><strong>{escape_value(shorten_display_text(confirmation, 88))}</strong></div>
+        <div class="action-copy"><span>Invalidation</span><strong>{escape_value(shorten_display_text(invalidation, 88))}</strong></div>
+        <div class="level-summary-row bullish"><span>Bull path</span><strong>{escape_value(level_value("bullish_trigger"))} → {escape_value(level_value("bullish_breakout"))}</strong></div>
+        <div class="level-summary-row bearish"><span>Bear path</span><strong>{escape_value(level_value("bearish_trigger"))} → {escape_value(level_value("bearish_breakdown"))}</strong></div>
         {choppy_warning}
+        <details class="card-more-details">
+          <summary>Full next-step detail</summary>
+          <div class="action-copy"><span>Confirmation needed</span><strong>{escape_value(confirmation)}</strong></div>
+          <div class="action-copy"><span>Invalidation</span><strong>{escape_value(invalidation)}</strong></div>
+        </details>
+      </section>
+      <section id="key-levels-overview" class="overview-card key-levels-card">
+        <div class="overview-heading"><span>Key Levels</span><strong>Structure map</strong></div>
+        <div class="key-levels-grid">
+          <div class="level-core"><span>Live</span><strong>{escape_value(live_price)}</strong></div>
+          <div class="level-core"><span>Support</span><strong>{escape_value(level_value("nearest_support"))}</strong></div>
+          <div class="level-core"><span>Resistance</span><strong>{escape_value(level_value("nearest_resistance"))}</strong></div>
+          <div class="level-path bullish"><span>Bull Trigger</span><strong>{escape_value(level_value("bullish_trigger"))}</strong></div>
+          <div class="level-path bullish"><span>Bull Confirm</span><strong>{escape_value(level_value("bullish_confirmation"))}</strong></div>
+          <div class="level-path bullish"><span>Bull Breakout</span><strong>{escape_value(level_value("bullish_breakout"))}</strong></div>
+          <div class="level-path bearish"><span>Bear Trigger</span><strong>{escape_value(level_value("bearish_trigger"))}</strong></div>
+          <div class="level-path bearish"><span>Bear Confirm</span><strong>{escape_value(level_value("bearish_confirmation"))}</strong></div>
+          <div class="level-path bearish"><span>Bear Breakdown</span><strong>{escape_value(level_value("bearish_breakdown"))}</strong></div>
+        </div>
       </section>
     </div>
-    <section id="key-levels-overview" class="overview-card key-levels-card">
-      <div class="overview-heading"><span>Key Levels</span><strong>Live structure map</strong></div>
-      <div class="key-levels-grid">
-        <div class="level-core"><span>Live Price</span><strong>{escape_value(live_price)}</strong></div>
-        <div class="level-core"><span>Support</span><strong>{escape_value(level_value("nearest_support"))}</strong></div>
-        <div class="level-core"><span>Resistance</span><strong>{escape_value(level_value("nearest_resistance"))}</strong></div>
-        <div class="level-path bullish"><span>Bull Trigger</span><strong>{escape_value(level_value("bullish_trigger"))}</strong></div>
-        <div class="level-path bullish"><span>Bull Confirmation</span><strong>{escape_value(level_value("bullish_confirmation"))}</strong></div>
-        <div class="level-path bullish"><span>Bull Breakout</span><strong>{escape_value(level_value("bullish_breakout"))}</strong></div>
-        <div class="level-path bearish"><span>Bear Trigger</span><strong>{escape_value(level_value("bearish_trigger"))}</strong></div>
-        <div class="level-path bearish"><span>Bear Confirmation</span><strong>{escape_value(level_value("bearish_confirmation"))}</strong></div>
-        <div class="level-path bearish"><span>Bear Breakdown</span><strong>{escape_value(level_value("bearish_breakdown"))}</strong></div>
-      </div>
-    </section>
     """
 
 
@@ -4319,7 +4369,8 @@ def build_multi_timeframe_monitor(latest):
         f'<div class="mtf-card {(status or "neutral").lower()}">'
         f"<span>{escape_value(label)}</span>"
         f"<strong>{escape_value(status or 'Neutral')}</strong>"
-        f"<p>{escape_value(reason)}</p>"
+        f"<details class='card-more-details'><summary>Why</summary>"
+        f"<p class='detail-line'>{escape_value(reason)}</p></details>"
         "</div>"
         for label, status, reason in timeframes
     )
@@ -4923,13 +4974,12 @@ def build_engine_health_section(rows):
         drivers = '<p class="empty">Waiting for engine health data.</p>'
 
     return f"""
-    <section class="engine-section">
-      <h2>SPY Engine Health</h2>
+    <section id="section-engine-health" class="engine-section engine-health-card">
+      <div class="card-label-row"><span>Engine Health</span><strong class="engine-score-label {score_class}">{engine_label}</strong></div>
       <div class="engine-grid">
         <div class="engine-score {score_class}">
           <span>Engine Score</span>
           <strong>{engine_score:+.1f}%</strong>
-          <em>{engine_label}</em>
         </div>
         <div class="engine-counts">
           <div class="bullish"><strong>{bullish_count}</strong><span>Bullish</span></div>
@@ -4937,9 +4987,11 @@ def build_engine_health_section(rows):
           <div class="neutral"><strong>{neutral_count}</strong><span>Neutral</span></div>
         </div>
       </div>
-      <p class="note">Source: {escape_value(engine_source)} | Unique tickers: {total_count}</p>
-      <h3>Full Engine Basket</h3>
-      {drivers}
+      <p class="note">Source: {escape_value(engine_source)} · Unique tickers: {total_count}</p>
+      <details class="engine-basket-details card-more-details">
+        <summary>Full engine basket</summary>
+        {drivers}
+      </details>
     </section>
     """
 
@@ -5261,9 +5313,9 @@ def build_ai_paper_benchmark(benchmark):
     <section id="paper-benchmark-overview" class="ai-paper-benchmark">
       <div class="benchmark-heading">
         <div>
-          <span>Educational comparison only</span>
-          <h2>AI PAPER BENCHMARK</h2>
-          <p>One synthetic paper contract per confirmed setup. No broker connection and no real orders.</p>
+          <span>Paper Benchmark</span>
+          <h2>AI Paper Benchmark</h2>
+          <p class="benchmark-tagline">Educational synthetic comparison only.</p>
         </div>
         <div class="benchmark-status {status_class}">
           <span>Status</span>
@@ -5272,17 +5324,17 @@ def build_ai_paper_benchmark(benchmark):
         </div>
       </div>
       <div class="benchmark-focus-grid">
-        <div><span>Paper Mode</span><strong>{escape_value(paper_mode_text)}</strong></div>
+        <div><span>Mode</span><strong>{escape_value(paper_mode_text)}</strong></div>
         <div><span>Bias</span><strong>{escape_value(benchmark.get("benchmark_bias"))}</strong></div>
         <div><span>Confidence</span><strong>{(parse_float(benchmark.get("benchmark_confidence")) or 0):.0f}%</strong></div>
-        <div class="wide"><span>Why Not Trading</span><strong>{escape_value(benchmark.get("paper_last_block_reason") or no_trade_reason)}</strong></div>
+        <div class="wide"><span>Trade Status</span><strong>{escape_value(benchmark.get("paper_last_block_reason") or no_trade_reason)}</strong></div>
         <div><span>Stop Source</span><strong>{escape_value(benchmark.get("paper_stop_source") or "none")}</strong></div>
         <div><span>Paper Stop</span><strong>${(parse_float(benchmark.get("paper_stop")) or 0):.4f}</strong></div>
         <div><span>Paper Target</span><strong>${(parse_float(benchmark.get("paper_target")) or 0):.4f}</strong></div>
-        <div><span>Research R/R</span><strong>{(parse_float(benchmark.get("paper_risk_reward")) or 0):.2f}</strong></div>
+        <div><span>R/R</span><strong>{(parse_float(benchmark.get("paper_risk_reward")) or 0):.2f}</strong></div>
       </div>
       <details class="benchmark-detail-log">
-        <summary>Benchmark details, safeguards, and paper trade log</summary>
+        <summary>Full benchmark details &amp; trade log</summary>
         <div class="benchmark-detail-body">
       <div class="benchmark-summary-grid">
         <div><span>Starting Balance</span><strong>${(parse_float(benchmark.get("starting_balance")) or 0):,.2f}</strong></div>
@@ -6367,10 +6419,6 @@ def build_dashboard_content():
     pre_market_panel = build_pre_market_panel(latest)
     top_education_guides = build_top_education_guides()
     signal_explanation = build_signal_explanation(latest, regime_data, live_status)
-    regime_label = build_regime_label(regime_data)
-    stability_label = build_stability_label(latest)
-    vwap_label = build_vwap_label(latest)
-    opening_range_label = build_opening_range_label(latest)
     regime_section = build_regime_details(regime_data)
     stability_section = build_stability_details(latest)
     vwap_section = build_vwap_details(latest)
@@ -6401,7 +6449,7 @@ def build_dashboard_content():
         latest.get("spy_price") if latest else None,
         last_daily_midpoint_analysis
     )
-    chart_details = build_collapsible("SPY Chart", live_chart, True)
+    chart_details = build_collapsible("SPY Chart", live_chart, False)
     chart_reading_details = build_collapsible(
         "Chart Reading Details",
         chart_reading_section
@@ -6410,9 +6458,9 @@ def build_dashboard_content():
         "Support/Resistance Details",
         support_resistance_section
     )
-    engine_details = build_collapsible(
-        "Engine Health",
-        engine_health_section
+    structure_details = build_collapsible(
+        "Structure & Level Detail",
+        signal_explanation
     )
     pressure_details = build_collapsible("Call vs Put Pressure", pressure_section)
     breadth_details = build_collapsible(
@@ -6432,15 +6480,17 @@ def build_dashboard_content():
     score_details = build_collapsible("Score Breakdown", score_breakdown)
     accuracy_details = build_collapsible("Accuracy", accuracy_tracker)
     market_replay_details = build_collapsible(
-        "MARKET REPLAY & EDUCATION",
+        "Market Replay & Education",
         market_replay
     )
     historical_archive_details = build_collapsible(
-        "HISTORICAL MARKET ARCHIVE",
+        "Historical Market Archive",
         historical_archive
     )
-    trend_box_details = build_collapsible("TREND BOX", trend_box)
-    market_box_details = build_collapsible("MARKET BOX", market_box)
+    trend_box_details = build_collapsible("Trend Box", trend_box)
+    market_box_details = build_collapsible("Market Box", market_box)
+    mtf_details = build_collapsible("Multi-Timeframe Monitor", multi_timeframe_monitor)
+    reversal_details = build_collapsible("Reversal Monitor", reversal_monitor)
     logs_details = build_collapsible(
         "Logs",
         f"<h2>Recent Predictions</h2>{prediction_table}"
@@ -6457,41 +6507,45 @@ def build_dashboard_content():
 
     return f"""
     {sticky_signal_summary}
-    {top_confluence_checklist}
-    {trade_decision_meter}
-    {time_discipline_card}
-    {intraday_midpoints}
-    {daily_midpoint}
-    {pre_market_panel}
-    {trade_risk_meter}
-    {top_education_guides}
-    {signal_explanation}
-    {multi_timeframe_monitor}
-    {reversal_monitor}
-    {vwap_label}
-    {opening_range_label}
-    {prediction_card}
-    {position_plan}
-    {score_details}
-    {chart_details}
-    {support_resistance_details}
-    {market_box_details}
-    {trend_box_details}
-    {chart_reading_details}
-    {regime_details}
-    {stability_details}
-    {vwap_details}
-    {opening_range_details}
-    {breadth_details}
-    {engine_details}
-    {pressure_details}
-    {accuracy_details}
-    {market_replay_details}
-    {historical_archive_details}
-    {ai_paper_benchmark}
-    {recent_signal_history_details}
-    {recent_alert_history_details}
-    {logs_details}
+    <div class="dashboard-secondary-grid">
+      {ai_paper_benchmark}
+      {engine_health_section}
+    </div>
+    <div class="dashboard-lower">
+      {chart_details}
+      <div class="dashboard-advanced-stack">
+        {time_discipline_card}
+        {trade_decision_meter}
+        {trade_risk_meter}
+        {top_confluence_checklist}
+        {prediction_card}
+        {position_plan}
+        {intraday_midpoints}
+        {daily_midpoint}
+        {pre_market_panel}
+        {top_education_guides}
+        {score_details}
+        {structure_details}
+        {support_resistance_details}
+        {market_box_details}
+        {trend_box_details}
+        {chart_reading_details}
+        {mtf_details}
+        {reversal_details}
+        {regime_details}
+        {stability_details}
+        {vwap_details}
+        {opening_range_details}
+        {breadth_details}
+        {pressure_details}
+        {accuracy_details}
+        {market_replay_details}
+        {historical_archive_details}
+        {recent_signal_history_details}
+        {recent_alert_history_details}
+        {logs_details}
+      </div>
+    </div>
     """
 
 
@@ -8854,7 +8908,7 @@ def build_page():
       font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
       line-height: 1.5;
     }}
-    main {{ width: min(1320px, 100%); padding: 18px 24px 44px; }}
+    main {{ width: min(1200px, 100%); padding: 20px 24px 48px; }}
     h1, h2, h3, strong {{ color: var(--text); }}
     h1, h2, h3 {{ letter-spacing: -0.03em; }}
     h2 {{ font-size: clamp(19px, 2vw, 27px) !important; }}
@@ -8941,8 +8995,8 @@ def build_page():
       color: var(--text) !important;
       box-shadow: var(--shadow-soft) !important;
     }}
-    section {{ margin-top: 18px !important; }}
-    .detail-section {{ margin-top: 16px !important; overflow: hidden; }}
+    section {{ margin-top: 22px !important; }}
+    .detail-section {{ margin-top: 18px !important; overflow: hidden; }}
     .detail-section summary,
     .benchmark-detail-log > summary {{
       padding: 17px 20px !important;
@@ -8997,12 +9051,14 @@ def build_page():
     .signal-hero-kicker strong {{ color: var(--text); }}
     .feed-dot {{ width: 9px; height: 9px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 5px rgba(255, 107, 122, .10); }}
     .feed-dot.live {{ background: var(--green); box-shadow: 0 0 0 5px rgba(56, 217, 150, .10); }}
-    .signal-hero h1 {{ margin: 17px 0 12px; color: var(--text) !important; font-size: clamp(34px, 5vw, 60px) !important; line-height: 1 !important; font-weight: 860 !important; }}
+    .signal-hero h1 {{ margin: 12px 0 0; color: var(--text) !important; font-size: clamp(30px, 4.5vw, 52px) !important; line-height: 1.02 !important; font-weight: 860 !important; }}
     .signal-hero-copy > p {{ max-width: 760px; margin: 0; color: #c6d3e1 !important; font-size: 16px; line-height: 1.65; }}
     .signal-hero-meta {{ display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 20px; color: var(--muted); font-size: 11px; }}
     .signal-hero-meta b {{ color: #cbd7e5; }}
-    .signal-hero-stats {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
-    .hero-stat {{ display: flex; flex-direction: column; justify-content: center; min-height: 104px; padding: 17px; border: 1px solid var(--border); border-radius: 16px; background: rgba(255, 255, 255, 0.045); }}
+    .signal-hero-stats {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-content: start; }}
+    .hero-stat {{ display: flex; flex-direction: column; justify-content: center; min-height: 96px; padding: 18px 20px; border: 1px solid var(--border); border-radius: 16px; background: rgba(255, 255, 255, 0.045); }}
+    .hero-signal-primary {{ grid-column: 1 / -1; min-height: 112px; }}
+    .hero-signal-primary strong {{ font-size: clamp(36px, 5vw, 56px) !important; }}
     .hero-stat:first-child {{ grid-column: 1; grid-row: 1; }}
     .hero-stat:last-child {{ grid-column: 2; grid-row: 1; }}
     .hero-signal {{ grid-column: 1 / -1; grid-row: 2; }}
@@ -9014,8 +9070,11 @@ def build_page():
     .hero-signal strong {{ overflow-wrap: normal !important; word-break: normal; }}
     .data-stale-warning {{ margin: 10px 0 0 !important; border-radius: 12px !important; background: rgba(255, 107, 122, .12) !important; color: var(--red) !important; }}
 
-    .dashboard-primary-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }}
-    .overview-card {{ margin: 0 !important; padding: 22px !important; }}
+    .dashboard-primary-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin-top: 22px; }}
+    .dashboard-secondary-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: 22px; }}
+    .dashboard-lower {{ margin-top: 22px; }}
+    .dashboard-advanced-stack {{ display: grid; gap: 18px; margin-top: 18px; }}
+    .overview-card {{ margin: 0 !important; padding: 28px !important; }}
     .overview-heading {{ display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 18px; }}
     .overview-heading > span {{ color: var(--muted); font-size: 12px; font-weight: 850; letter-spacing: .09em; text-transform: uppercase; }}
     .overview-heading > strong {{ text-align: right; }}
@@ -9033,7 +9092,78 @@ def build_page():
     .overview-grid strong,
     .key-levels-grid strong,
     .benchmark-focus-grid strong {{ display: block; overflow-wrap: anywhere; }}
-    .overview-footnote {{ margin: 14px 0 0; font-size: 12px; }}
+    .overview-footnote {{ margin: 12px 0 0; font-size: 12px; }}
+    .chip-row {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+    .chip {{
+      display: inline-flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.04);
+    }}
+    .chip small {{
+      color: var(--muted) !important;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }}
+    .chip b {{ color: var(--text); font-size: 13px; line-height: 1.2; }}
+    .card-label-row {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }}
+    .card-label-row > span {{
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 850;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }}
+    .card-label-row > strong {{ font-size: 22px; }}
+    .card-more-details {{
+      margin-top: 14px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.025);
+      overflow: hidden;
+    }}
+    .card-more-details > summary {{
+      cursor: pointer;
+      padding: 11px 14px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+      list-style: none;
+    }}
+    .card-more-details[open] > summary {{ border-bottom: 1px solid var(--border); color: var(--text); }}
+    .card-more-details .detail-line,
+    .card-more-details > p,
+    .card-more-details .action-copy {{ margin: 0; padding: 12px 14px; font-size: 13px; line-height: 1.5; color: #c5d3e2 !important; }}
+    .benchmark-tagline {{ margin: 4px 0 0 !important; font-size: 12px !important; }}
+    .engine-score-label.bullish {{ color: var(--green); }}
+    .engine-score-label.bearish {{ color: var(--red); }}
+    .engine-score-label.neutral {{ color: var(--amber); }}
+    .no-trade-warning {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-top: 12px !important;
+      padding: 10px 12px !important;
+      border: 1px solid rgba(242, 189, 85, .24) !important;
+      border-radius: 12px !important;
+      background: rgba(242, 189, 85, .08) !important;
+      color: var(--amber) !important;
+    }}
+    .no-trade-warning strong {{ font-size: 12px; }}
+    .no-trade-warning span, .no-trade-warning p {{ margin: 0 !important; font-size: 12px !important; color: inherit !important; }}
     .action-copy {{ margin-bottom: 10px; padding: 13px 14px; border-left: 3px solid #4c6f96; border-radius: 0 12px 12px 0; background: rgba(255,255,255,.03); }}
     .action-copy span, .level-summary-row span {{ display: block; color: var(--muted); font-size: 11px; margin-bottom: 4px; }}
     .action-copy strong {{ font-size: 13px; line-height: 1.5; }}
@@ -9042,19 +9172,18 @@ def build_page():
     .level-summary-row strong {{ font-size: 12px; text-align: right; }}
     .bullish strong, .level-path.bullish strong {{ color: var(--green) !important; }}
     .bearish strong, .level-path.bearish strong {{ color: var(--red) !important; }}
-    .no-trade-warning {{ margin-top: 12px !important; border: 1px solid rgba(242, 189, 85, .24) !important; border-radius: 12px !important; background: rgba(242, 189, 85, .08) !important; color: var(--amber) !important; }}
 
-    .key-levels-card {{ margin-top: 16px !important; padding: 22px !important; }}
+    .key-levels-card {{ margin: 0 !important; padding: 28px !important; }}
     .key-levels-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }}
     .level-core {{ background: rgba(91, 132, 177, .12) !important; }}
 
-    .engine-section {{ padding: 22px !important; }}
+    .engine-section {{ padding: 28px !important; margin: 0 !important; }}
     .engine-grid {{ gap: 12px !important; }}
     .engine-score, .engine-counts > div {{ border: 1px solid var(--border) !important; border-radius: 14px !important; background: var(--panel-soft) !important; }}
     .engine-score strong {{ color: var(--text) !important; }}
     .engine-section .note {{ margin: 12px 0 4px; font-size: 11px; }}
 
-    .ai-paper-benchmark {{ padding: 24px !important; }}
+    .ai-paper-benchmark {{ padding: 28px !important; margin: 0 !important; }}
     .benchmark-heading {{ margin-bottom: 18px; }}
     .benchmark-focus-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }}
     .benchmark-focus-grid .wide {{ grid-column: span 2; }}
@@ -9097,11 +9226,17 @@ def build_page():
     input, select {{ color: var(--text) !important; background: var(--panel-soft) !important; border-color: var(--border) !important; }}
     .dashboard-footer {{ color: #6f849b; }}
 
+    @media (max-width: 1100px) {{
+      .dashboard-primary-grid.dashboard-row-two {{ grid-template-columns: 1fr 1fr; }}
+      .dashboard-primary-grid .key-levels-card {{ grid-column: 1 / -1; }}
+    }}
+
     @media (max-width: 900px) {{
       .dashboard-nav {{ grid-template-columns: 1fr auto; }}
       .dashboard-nav nav {{ grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; overflow-x: auto; padding-bottom: 2px; }}
       .signal-hero {{ grid-template-columns: 1fr !important; }}
-      .dashboard-primary-grid {{ grid-template-columns: 1fr; }}
+      .dashboard-primary-grid,
+      .dashboard-secondary-grid {{ grid-template-columns: 1fr; }}
       .benchmark-focus-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
     }}
 
@@ -9109,13 +9244,13 @@ def build_page():
       main {{ padding: 10px 12px 30px; }}
       .dashboard-nav {{ top: 6px; gap: 10px; padding: 9px 10px 9px 13px; border-radius: 15px; }}
       .dashboard-nav nav a {{ padding: 7px 9px; font-size: 12px; }}
-      .signal-hero {{ padding: 21px !important; border-radius: 18px !important; }}
-      .signal-hero h1 {{ font-size: 36px !important; }}
+      .signal-hero {{ padding: 22px !important; border-radius: 18px !important; }}
+      .signal-hero h1 {{ font-size: 32px !important; }}
       .signal-hero-stats {{ grid-template-columns: 1fr 1fr; }}
-      .hero-stat {{ min-height: 88px; padding: 13px; }}
-      .hero-stat strong {{ font-size: 24px; }}
-      .overview-card, .key-levels-card, .engine-section, .ai-paper-benchmark {{ padding: 17px !important; }}
-      .overview-grid, .key-levels-grid, .benchmark-focus-grid {{ grid-template-columns: 1fr 1fr; }}
+      .hero-stat {{ min-height: 84px; padding: 14px 16px; }}
+      .hero-signal-primary strong {{ font-size: 32px !important; }}
+      .overview-card, .key-levels-card, .engine-section, .ai-paper-benchmark {{ padding: 20px !important; }}
+      .key-levels-grid, .benchmark-focus-grid {{ grid-template-columns: 1fr 1fr; }}
       .benchmark-focus-grid .wide {{ grid-column: 1 / -1; }}
       .level-summary-row {{ display: block; }}
       .level-summary-row strong {{ display: block; margin-top: 4px; text-align: left; }}
@@ -9123,8 +9258,16 @@ def build_page():
       th, td {{ padding: 9px 10px !important; white-space: nowrap; }}
     }}
 
-    @media (max-width: 420px) {{
-      .overview-grid, .key-levels-grid, .benchmark-focus-grid {{ grid-template-columns: 1fr; }}
+    @media (max-width: 390px) {{
+      body {{ font-size: 14px !important; }}
+      .signal-hero h1 {{ font-size: 28px !important; }}
+      .hero-stat strong {{ font-size: 20px; }}
+      .hero-signal-primary strong {{ font-size: 28px !important; }}
+      .overview-heading > strong {{ font-size: 16px; }}
+      .signal-badge {{ min-width: 72px; padding: 7px 12px; font-size: 18px; }}
+      .chip {{ padding: 7px 10px; }}
+      .chip b {{ font-size: 12px; }}
+      .key-levels-grid, .benchmark-focus-grid, .overview-grid {{ grid-template-columns: 1fr; }}
       .benchmark-focus-grid .wide {{ grid-column: auto; }}
       .dashboard-brand span {{ display: none; }}
     }}
