@@ -68,6 +68,25 @@ def read_last_csv_row(path):
         return {}
 
 
+def read_latest_csv_rows_by_key(path, key):
+    try:
+        with open(path, "r", encoding="utf-8-sig", newline="") as file:
+            latest_rows = {}
+
+            for row in csv.DictReader(file):
+                row_key = row.get(key)
+
+                if row_key:
+                    latest_rows[row_key] = row
+
+            return list(latest_rows.values())
+    except FileNotFoundError:
+        return []
+    except (OSError, csv.Error) as error:
+        print(f"Could not read CSV file {path}: {error}")
+        return []
+
+
 def safe_float(value):
     try:
         if value in ("", None, "N/A", "NA", "--"):
@@ -93,7 +112,7 @@ def build_payload():
     scan = read_last_csv_row(SCAN_LOG_FILE)
     prediction = read_last_csv_row(PREDICTION_FILE)
     breadth = read_last_csv_row(MARKET_BREADTH_FILE)
-    engine = read_last_csv_row(ENGINE_HEALTH_FILE)
+    engine_rows = read_latest_csv_rows_by_key(ENGINE_HEALTH_FILE, "ticker")
     alert = read_last_csv_row(ALERTS_FILE)
     level_hits = read_json_file(LEVEL_HITS_FILE)
 
@@ -163,7 +182,7 @@ def build_payload():
         "latest_scan": scan,
         "latest_prediction": prediction,
         "latest_market_breadth": breadth,
-        "latest_engine_health": engine,
+        "latest_engine_health": engine_rows,
         "latest_alert": alert,
         "latest_level_hits": level_hits,
     }
@@ -181,9 +200,10 @@ def build_payload():
         payload.setdefault(key, value)
         payload.setdefault(f"breadth_{key}", value)
 
-    for key, value in engine.items():
-        payload.setdefault(key, value)
-        payload.setdefault(f"engine_{key}", value)
+    if engine_rows:
+        for key, value in engine_rows[-1].items():
+            payload.setdefault(key, value)
+            payload.setdefault(f"engine_{key}", value)
 
     # Render dashboard aliases.
     # Local scanner uses bullish_/bearish_ names.

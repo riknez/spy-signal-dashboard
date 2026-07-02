@@ -360,7 +360,9 @@ def read_live_status():
         "analysis_delayed": analysis_delayed,
         "feed_status": feed_status,
         "stale": data_age > LIVE_STATUS_DISCONNECTED_SECONDS,
-        "stale_reason": stale_reason
+        "stale_reason": stale_reason,
+        "latest_engine_health": status.get("latest_engine_health"),
+        "latest_market_breadth": status.get("latest_market_breadth")
     }
 
 
@@ -5660,6 +5662,19 @@ def build_dashboard_content():
     a_plus_result_rows = read_a_plus_results()
     engine_rows = read_engine_health()
     breadth_row = read_market_breadth()
+    if not engine_rows:
+        pushed_engine_rows = live_status.get("latest_engine_health")
+
+        if isinstance(pushed_engine_rows, list):
+            engine_rows = [row for row in pushed_engine_rows if isinstance(row, dict)]
+        elif isinstance(pushed_engine_rows, dict) and pushed_engine_rows:
+            engine_rows = [pushed_engine_rows]
+
+    if not breadth_row:
+        pushed_breadth_row = live_status.get("latest_market_breadth")
+
+        if isinstance(pushed_breadth_row, dict) and pushed_breadth_row:
+            breadth_row = pushed_breadth_row
     update_historical_market_archive(rows, alert_rows, result_rows)
     latest = dict(rows[-1]) if rows else None
 
