@@ -816,6 +816,12 @@ def new_ai_benchmark_state(cycle=1, previous_cycle=None):
         "paper_last_evaluation_time": now.isoformat(),
         "paper_trade_candidate_direction": None,
         "paper_trade_candidate_confidence": 0,
+        "paper_stop_source": "none",
+        "paper_stop": None,
+        "paper_target": None,
+        "paper_risk_per_share": None,
+        "paper_reward_per_share": None,
+        "paper_risk_reward": None,
         "max_equity": AI_BENCHMARK_STARTING_BALANCE,
         "max_drawdown": 0.0,
         "cycle_started_at": now.isoformat(),
@@ -1337,7 +1343,55 @@ def get_ai_benchmark_entry_signal(decision, latest, data_stale, prediction_rows=
     }
 
 
-def build_ai_benchmark_trade_plan(latest, direction, entry):
+def build_ai_benchmark_trade_plan(latest, direction, entry, research_replay=False):
+    entry_price = (
+        parse_float(entry)
+        or parse_float(latest.get("live_price"))
+        or parse_float(latest.get("current_spy_price"))
+        or parse_float(latest.get("spy_price"))
+    )
+    if entry_price is None or not math.isfinite(entry_price):
+        return None
+
+    if research_replay:
+        support = parse_float(latest.get("nearest_support"))
+        resistance = parse_float(latest.get("nearest_resistance"))
+
+        if direction == "CALL":
+            if support is not None and support < entry_price:
+                stop = support
+                stop_source = "structure_support"
+            else:
+                stop = entry_price - 0.35
+                stop_source = "research_fallback"
+            risk = entry_price - stop
+            target = entry_price + (risk * 1.5)
+        elif direction == "PUT":
+            if resistance is not None and resistance > entry_price:
+                stop = resistance
+                stop_source = "structure_resistance"
+            else:
+                stop = entry_price + 0.35
+                stop_source = "research_fallback"
+            risk = stop - entry_price
+            target = entry_price - (risk * 1.5)
+        else:
+            return None
+
+        reward = abs(target - entry_price)
+        if not all(math.isfinite(value) for value in (stop, target, risk, reward)):
+            return None
+        if risk <= 0 or reward <= 0:
+            return None
+        return {
+            "stop": stop,
+            "target": target,
+            "risk": risk,
+            "reward": reward,
+            "risk_reward": reward / risk,
+            "stop_source": stop_source
+        }
+
     if direction == "CALL":
         stop_candidates = [
             value for value in (
@@ -1346,7 +1400,7 @@ def build_ai_benchmark_trade_plan(latest, direction, entry):
                 parse_float(latest.get("vwap")),
                 parse_float(latest.get("bearish_trigger"))
             )
-            if value is not None and value < entry
+            if value is not None and value < entry_price
         ]
         target_candidates = [
             value for value in (
@@ -1354,12 +1408,12 @@ def build_ai_benchmark_trade_plan(latest, direction, entry):
                 parse_float(latest.get("bullish_breakout")),
                 parse_float(latest.get("nearest_resistance"))
             )
-            if value is not None and value > entry
+            if value is not None and value > entry_price
         ]
         stop = max(stop_candidates) if stop_candidates else None
-        risk = entry - stop if stop is not None else None
+        risk = entry_price - stop if stop is not None else None
         target = min(target_candidates) if target_candidates else (
-            entry + risk if risk is not None else None
+            entry_price + risk if risk is not None else None
         )
     else:
         stop_candidates = [
@@ -1369,7 +1423,7 @@ def build_ai_benchmark_trade_plan(latest, direction, entry):
                 parse_float(latest.get("vwap")),
                 parse_float(latest.get("bullish_trigger"))
             )
-            if value is not None and value > entry
+            if value is not None and value > entry_price
         ]
         target_candidates = [
             value for value in (
@@ -1377,17 +1431,25 @@ def build_ai_benchmark_trade_plan(latest, direction, entry):
                 parse_float(latest.get("bearish_breakdown")),
                 parse_float(latest.get("nearest_support"))
             )
-            if value is not None and value < entry
+            if value is not None and value < entry_price
         ]
         stop = min(stop_candidates) if stop_candidates else None
-        risk = stop - entry if stop is not None else None
+        risk = stop - entry_price if stop is not None else None
         target = max(target_candidates) if target_candidates else (
-            entry - risk if risk is not None else None
+            entry_price - risk if risk is not None else None
         )
 
     if stop is None or target is None or risk is None or risk < 0.03 or risk > 1.50:
         return None
-    return {"stop": stop, "target": target, "risk": risk}
+    reward = abs(target - entry_price)
+    return {
+        "stop": stop,
+        "target": target,
+        "risk": risk,
+        "reward": reward,
+        "risk_reward": reward / risk if risk else None,
+        "stop_source": "structure_plan"
+    }
 
 
 def ai_benchmark_contract_price(position, current_spy_price):
@@ -1540,17 +1602,39 @@ def update_ai_paper_benchmark(latest, decision, regime, trade_risk, current_pric
                 state["paper_exit_rule_used"] = exit_reason
                 changed = True
 
+        research_replay = PAPER_RESEARCH_MODE and paper_mode == "RESEARCH REPLAY"
         plan = (
-            build_ai_benchmark_trade_plan(latest, entry_signal["direction"], price)
+            build_ai_benchmark_trade_plan(
+                latest,
+                entry_signal["direction"],
+                price,
+                research_replay
+            )
             if entry_signal.get("direction") and not state.get("open_position")
             else None
         )
+        active_position = state.get("open_position")
+        resolved_plan = plan or active_position
+        if resolved_plan:
+            state["paper_stop_source"] = resolved_plan.get("stop_source", "structure_plan")
+            state["paper_stop"] = resolved_plan.get("stop")
+            state["paper_target"] = resolved_plan.get("target")
+            state["paper_risk_per_share"] = resolved_plan.get("risk")
+            state["paper_reward_per_share"] = resolved_plan.get("reward")
+            state["paper_risk_reward"] = resolved_plan.get("risk_reward")
+        else:
+            state["paper_stop_source"] = "none"
+            state["paper_stop"] = None
+            state["paper_target"] = None
+            state["paper_risk_per_share"] = None
+            state["paper_reward_per_share"] = None
+            state["paper_risk_reward"] = None
         permission = get_ai_benchmark_entry_permission(
             state,
             now,
             bool(plan) if entry_signal.get("direction") else True,
             data_stale,
-            PAPER_RESEARCH_MODE and paper_mode == "RESEARCH REPLAY"
+            research_replay
         )
         state.update({
             "trades_today": permission["trades_today"],
@@ -1612,6 +1696,11 @@ def update_ai_paper_benchmark(latest, decision, regime, trade_risk, current_pric
                     "contracts": 1,
                     "stop": round(plan["stop"], 4),
                     "target": round(plan["target"], 4),
+                    "stop_source": plan["stop_source"],
+                    "risk": round(plan["risk"], 4),
+                    "reward": round(plan["reward"], 4),
+                    "risk_reward": round(plan["risk_reward"], 2),
+                    "result": "OPEN",
                     "reason": entry_signal.get("reason"),
                     "entry_reason": entry_signal.get("reason"),
                     "signal_key": signal_key
@@ -1693,7 +1782,13 @@ def update_ai_paper_benchmark(latest, decision, regime, trade_risk, current_pric
             "paper_entry_rule_used",
             "paper_last_evaluation_time",
             "paper_trade_candidate_direction",
-            "paper_trade_candidate_confidence"
+            "paper_trade_candidate_confidence",
+            "paper_stop_source",
+            "paper_stop",
+            "paper_target",
+            "paper_risk_per_share",
+            "paper_reward_per_share",
+            "paper_risk_reward"
         ))
         if status_signature != state.get("last_status_signature"):
             state["last_status_signature"] = status_signature
@@ -5183,6 +5278,12 @@ def build_ai_paper_benchmark(benchmark):
         <div><span>Entry Rule Used</span><strong>{escape_value(benchmark.get("paper_entry_rule_used") or "None")}</strong></div>
         <div><span>Exit Rule Used</span><strong>{escape_value(benchmark.get("paper_exit_rule_used"))}</strong></div>
         <div><span>Last Evaluation Time</span><strong>{escape_value(benchmark.get("paper_last_evaluation_time"))}</strong></div>
+        <div><span>Stop Source</span><strong>{escape_value(benchmark.get("paper_stop_source") or "none")}</strong></div>
+        <div><span>Paper Stop</span><strong>${(parse_float(benchmark.get("paper_stop")) or 0):.4f}</strong></div>
+        <div><span>Paper Target</span><strong>${(parse_float(benchmark.get("paper_target")) or 0):.4f}</strong></div>
+        <div><span>Risk Per Share</span><strong>${(parse_float(benchmark.get("paper_risk_per_share")) or 0):.4f}</strong></div>
+        <div><span>Reward Per Share</span><strong>${(parse_float(benchmark.get("paper_reward_per_share")) or 0):.4f}</strong></div>
+        <div><span>Research R/R</span><strong>{(parse_float(benchmark.get("paper_risk_reward")) or 0):.2f}</strong></div>
         <div><span>Trades Today</span><strong>{escape_value(benchmark.get("trades_today"))} / 10</strong></div>
         <div><span>Daily Goal</span><strong>{escape_value(benchmark.get("daily_goal") or "3-10")}</strong></div>
         <div><span>Daily Benchmark Status</span><strong>{escape_value(benchmark.get("daily_status"))}</strong></div>
@@ -5201,7 +5302,7 @@ def build_ai_paper_benchmark(benchmark):
         <div><span>Milestones</span><strong>{escape_value(", ".join(benchmark.get("milestones_hit") or []) or "None")}</strong></div>
       </div>
       <div class="benchmark-position-grid">
-        <div><span>Paper Trade Status</span><strong>{"Paper trade open" if position else "Paper trade closed / waiting"}</strong></div>
+        <div><span>Paper Trade Status</span><strong>{escape_value(position.get("result") or "OPEN") if position else "PENDING / waiting"}</strong></div>
         <div><span>Paper Trade Reason</span><strong>{escape_value(position.get("entry_reason") if position else last_trade.get("reason") if last_trade else benchmark.get("benchmark_entry_reason"))}</strong></div>
         <div><span>Open Paper Position</span><strong>{escape_value(position_text)}</strong></div>
         <div><span>Last Trade</span><strong>{escape_value(last_trade_text)}</strong></div>
@@ -5218,7 +5319,7 @@ def build_ai_paper_benchmark(benchmark):
         <summary>Benchmark model and safeguards</summary>
         <p>The benchmark uses its own educational entry model. A 5/11 side score, dominant 15-minute pressure, active breakout/breakdown, VWAP-aligned momentum, or Trend Box and Market Box agreement may open a paper trade even while the dashboard recommendation remains WAIT.</p>
         <p>It targets 3-10 paper trades when valid setups appear. It pauses at 10 trades, two consecutive losses, a -5% daily loss, or a +5% daily profit unless continue benchmark mode is enabled.</p>
-        <p>Stale data, invalid prices, missing structure stops, an existing paper position, daily trade limits, and two consecutive paper losses remain blocked. Research replay may evaluate the latest scanner snapshot outside regular hours; the visible dashboard recommendation and risk controls are unchanged.</p>
+        <p>Stale data, invalid prices, a missing resolved stop/target, an existing paper position, daily trade limits, and two consecutive paper losses remain blocked. Research replay may use a fixed paper-only fallback when structure support or resistance is unavailable; the visible dashboard recommendation and risk controls are unchanged.</p>
         <p>The synthetic comparison starts each contract at $1.00 and applies a fixed 0.50 delta to SPY movement. Exits use structure stop, structure target, opposite confirmation, or the 3:55 PM ET manage-only rule.</p>
         <p>This mode evaluates scanner behavior only. It does not create recommendations, connect to a broker, or represent exact option pricing.</p>
       </details>
@@ -6037,6 +6138,12 @@ def get_live_level_status():
         "paper_last_evaluation_time": benchmark.get("paper_last_evaluation_time"),
         "paper_trade_candidate_direction": benchmark.get("paper_trade_candidate_direction"),
         "paper_trade_candidate_confidence": benchmark.get("paper_trade_candidate_confidence", 0),
+        "paper_stop_source": benchmark.get("paper_stop_source", "none"),
+        "paper_stop": benchmark.get("paper_stop"),
+        "paper_target": benchmark.get("paper_target"),
+        "paper_risk_per_share": benchmark.get("paper_risk_per_share"),
+        "paper_reward_per_share": benchmark.get("paper_reward_per_share"),
+        "paper_risk_reward": benchmark.get("paper_risk_reward"),
         "daily_midpoint_source_suspicious": bool(
             last_daily_midpoint_analysis
             and last_daily_midpoint_analysis.get("suspicious")
