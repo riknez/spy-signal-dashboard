@@ -4559,10 +4559,68 @@ def build_live_chart(rows):
 
 
 def build_engine_health_section(rows):
-    bullish_count = sum(1 for row in rows if row.get("status") == "Bullish")
-    bearish_count = sum(1 for row in rows if row.get("status") == "Bearish")
-    neutral_count = sum(1 for row in rows if row.get("status") == "Neutral")
-    total_count = len(rows)
+    def latest_rows_by_ticker(candidate_rows):
+        latest_by_ticker = {}
+        latest_keys = {}
+
+        for row_index, row in enumerate(candidate_rows or []):
+            if not isinstance(row, dict):
+                continue
+
+            ticker = row.get("ticker") or row.get("symbol")
+            if not ticker:
+                continue
+
+            normalized_row = dict(row)
+            normalized_row["ticker"] = ticker
+            status = str(row.get("status") or "Neutral").strip().title()
+            normalized_row["status"] = (
+                status if status in {"Bullish", "Bearish", "Neutral"} else "Neutral"
+            )
+            timestamp = str(
+                row.get("time")
+                or row.get("timestamp")
+                or row.get("last_update")
+                or row.get("updated_at")
+                or ""
+            )
+            row_key = (timestamp, row_index)
+
+            if ticker not in latest_keys or row_key >= latest_keys[ticker]:
+                latest_keys[ticker] = row_key
+                latest_by_ticker[ticker] = normalized_row
+
+        return list(latest_by_ticker.values())
+
+    display_rows = latest_rows_by_ticker(rows)
+    engine_source = dashboard_engine_source
+    server_mode = (
+        os.name != "nt"
+        or os.environ.get("RENDER", "").strip().lower() in {"1", "true", "yes"}
+    )
+
+    if server_mode:
+        live_status = read_live_status()
+        pushed_rows = live_status.get("latest_engine_health_rows")
+
+        if not isinstance(pushed_rows, list) or not pushed_rows:
+            pushed_rows = live_status.get("latest_engine_health")
+
+        if isinstance(pushed_rows, dict):
+            pushed_rows = [pushed_rows]
+        elif not isinstance(pushed_rows, list):
+            pushed_rows = []
+
+        pushed_display_rows = latest_rows_by_ticker(pushed_rows)
+
+        if len(pushed_display_rows) > len(display_rows):
+            display_rows = pushed_display_rows
+            engine_source = "pushed_live_status"
+
+    bullish_count = sum(1 for row in display_rows if row.get("status") == "Bullish")
+    bearish_count = sum(1 for row in display_rows if row.get("status") == "Bearish")
+    neutral_count = sum(1 for row in display_rows if row.get("status") == "Neutral")
+    total_count = len(display_rows)
     engine_score = (
         ((bullish_count - bearish_count) / total_count) * 100
         if total_count else 0
@@ -4586,18 +4644,28 @@ def build_engine_health_section(rows):
         except (TypeError, ValueError):
             return 0
 
-    for row in sorted(rows, key=absolute_change, reverse=True):
-        status = row.get("status", "Neutral")
+    for status in ("Bullish", "Bearish", "Neutral"):
+        status_rows = [row for row in display_rows if row.get("status") == status]
+
+        if not status_rows:
+            continue
+
         status_class = status.lower()
         driver_rows.append(
-            "<tr>"
-            f"<td><strong>{escape_value(row.get('ticker'))}</strong></td>"
-            f"<td>${escape_value(row.get('price'))}</td>"
-            f"<td>{escape_value(row.get('day_change_percent'))}%</td>"
-            f'<td><span class="engine-status {status_class}">'
-            f"{escape_value(status)}</span></td>"
-            "</tr>"
+            f'<tr class="engine-group {status_class}">'
+            f'<th colspan="4">{status} ({len(status_rows)})</th></tr>'
         )
+
+        for row in sorted(status_rows, key=absolute_change, reverse=True):
+            driver_rows.append(
+                "<tr>"
+                f"<td><strong>{escape_value(row.get('ticker'))}</strong></td>"
+                f"<td>${escape_value(row.get('price'))}</td>"
+                f"<td>{escape_value(row.get('day_change_percent'))}%</td>"
+                f'<td><span class="engine-status {status_class}">'
+                f"{escape_value(status)}</span></td>"
+                "</tr>"
+            )
 
     if driver_rows:
         drivers = (
@@ -4624,7 +4692,8 @@ def build_engine_health_section(rows):
           <div class="neutral"><strong>{neutral_count}</strong><span>Neutral</span></div>
         </div>
       </div>
-      <h3>Top Drivers</h3>
+      <p class="note">Source: {escape_value(engine_source)} | Unique tickers: {total_count}</p>
+      <h3>Full Engine Basket</h3>
       {drivers}
     </section>
     """
