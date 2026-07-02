@@ -9015,7 +9015,7 @@ def main():
     server = HTTPServer((HOST, PORT), DashboardHandler)
 
     print(f"SPY dashboard reading: {os.path.abspath(PREDICTION_FILE)}")
-    print(f"Open: http://{HOST}:{PORT}")
+    print(f"Open locally: http://localhost:{PORT}")
     print(
         f"Password protection: "
         f"{'enabled' if DASHBOARD_PASSWORD else 'disabled for local access'}"
@@ -9031,5 +9031,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 
