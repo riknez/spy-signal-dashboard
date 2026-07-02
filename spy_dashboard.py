@@ -3391,47 +3391,83 @@ def build_compact_sticky_signal_summary(latest, regime_data, live_status, decisi
     score = max(decision["bullish_score"], decision["bearish_score"])
     market_phase = get_market_phase_display(latest, regime)
     warning_class = " visible" if feed_state != "live" else ""
+    confidence = parse_float((latest or {}).get("confidence")) or 0
+    reason = str(decision.get("reason") or "Waiting for confirmation.")
+    short_reason = f"{reason[:217]}..." if len(reason) > 220 else reason
+    confirmation = (latest or {}).get("confirmation_needed") or "Wait for directional confirmation."
+    invalidation = (latest or {}).get("invalidation_reason") or "No clean invalidation level yet."
+
+    def level_value(field):
+        value = (latest or {}).get(field)
+        return value if value not in (None, "") else "N/A"
+
     choppy_warning = (
         '<div class="no-trade-warning"><strong>&#9888; NO TRADE ZONE</strong>'
         '<p>Market is choppy. Wait for clean structure and confirmation.</p></div>'
         if regime.upper() == "CHOPPY" else ""
     )
     return f"""
-    <section class="sticky-area">
-      <div class="sticky-signal-summary compact {mode_class}">
-        <div id="live-signal-banner" class="sticky-mode">
-          <span>Decision</span><strong id="live-market-phase">{escape_value(decision["header"])}</strong>
+    <section id="dashboard-overview" class="sticky-area signal-hero-shell">
+      <div class="sticky-signal-summary signal-hero {mode_class}">
+        <div class="signal-hero-copy">
+          <div class="signal-hero-kicker">
+            <span class="feed-dot {feed_state}"></span>
+            <strong id="top-feed-status">{escape_value(feed_status)}</strong>
+            <span id="top-feed-age">Feed Age: {f"{feed_age:.0f} sec" if feed_age is not None else "N/A"}</span>
+          </div>
+          <h1>SPY Signal Dashboard</h1>
+          <p id="live-signal-reason">{escape_value(short_reason)}</p>
+          <div class="signal-hero-meta">
+            <span>Updated <b id="top-last-updated">{escape_value(live_status.get("updated_at") if live_status else "N/A")}</b></span>
+            <span id="top-analysis-age">Analysis Age: {f"{analysis_age:.0f} sec" if analysis_age is not None else "N/A"}</span>
+            <span>v<b id="top-dashboard-version">{escape_value(DASHBOARD_VERSION)}</b> / <b id="top-build-source">{escape_value(DASHBOARD_BUILD_SOURCE)}</b></span>
+          </div>
         </div>
-        <div class="sticky-price"><span>SPY</span><strong id="top-live-spy-price">{escape_value(live_price)}</strong></div>
-        <div class="sticky-feed">
-          <span id="top-feed-status">{escape_value(feed_status)}</span>
-          <strong id="top-feed-age">Feed Age: {f"{feed_age:.0f} sec" if feed_age is not None else "N/A"}</strong>
-          <small id="top-analysis-age">Analysis Age: {f"{analysis_age:.0f} sec" if analysis_age is not None else "N/A"}</small>
+        <div class="signal-hero-stats">
+          <div class="hero-stat"><span>SPY Price</span><strong id="top-live-spy-price">{escape_value(live_price)}</strong></div>
+          <div id="live-signal-banner" class="hero-stat hero-signal {mode_class}"><span>Current Signal</span><strong id="live-market-phase">{escape_value(mode)}</strong></div>
+          <div class="hero-stat"><span>Confidence</span><strong>{confidence:.0f}%</strong></div>
         </div>
-        <div class="sticky-score"><span>Score</span><strong id="top-score-compact">{score} / 11</strong></div>
-        <div class="sticky-version"><span>Version</span><strong id="top-dashboard-version">v{escape_value(DASHBOARD_VERSION)}</strong><small id="top-build-source">{escape_value(DASHBOARD_BUILD_SOURCE)}</small></div>
       </div>
       <div id="top-trend-override-pill" class="trend-override-banner{" visible" if latest and latest.get("dashboard_trend_override") else ""}">{escape_value(latest.get("dashboard_trend_override_label") or "TREND OVERRIDE ACTIVE") if latest else "TREND OVERRIDE ACTIVE"}</div>
       <div id="top-stale-warning" class="data-stale-warning {feed_state}{warning_class}">{escape_value(feed_status)}</div>
     </section>
-    <details class="mobile-collapsible decision-mobile-details" data-persist-id="why-this-decision">
-      <summary>Why this decision?</summary>
-      <section class="header-details-below">
-        <div class="sticky-context">
-          <span id="live-recommendation">Phase: {escape_value(market_phase)}</span>
-          <strong id="live-signal-reason">{escape_value(decision["reason"])}</strong>
-          <small>Updated <b id="top-last-updated">{escape_value(live_status.get("updated_at") if live_status else "N/A")}</b></small>
+    <div class="dashboard-primary-grid">
+      <section id="signal-overview" class="overview-card signal-overview {mode_class}">
+        <div class="overview-heading"><span>Signal</span><strong class="signal-badge {mode_class}">{escape_value(mode)}</strong></div>
+        <div class="overview-grid">
+          <div><span>Market Regime</span><strong id="top-regime-pill">{escape_value(regime)}</strong></div>
+          <div><span>Current Advantage</span><strong id="top-advantage-pill">{escape_value(decision["advantage"])}</strong></div>
+          <div><span>Trade Risk</span><strong>{escape_value(trade_risk)}</strong></div>
+          <div><span>Stability</span><strong id="top-stability-pill">{escape_value(stability)}</strong></div>
+          <div><span>A+ Setup</span><strong id="top-a-plus-pill">{escape_value(decision["a_plus_setup"])}</strong></div>
+          <div><span>Confluence</span><strong id="top-score-pill">{score} / 11</strong><b id="top-score-compact" class="visually-hidden">{score} / 11</b></div>
         </div>
-        <div class="sticky-pills">
-          <span>Regime: <b id="top-regime-pill">{escape_value(regime)}</b></span>
-          <span>Stability: <b id="top-stability-pill">{escape_value(stability)}</b></span>
-          <span>Advantage: <b id="top-advantage-pill">{escape_value(decision["advantage"])}</b></span>
-          <span>A+ Setup: <b id="top-a-plus-pill">{escape_value(decision["a_plus_setup"])}</b></span>
-          <span>Score: <b id="top-score-pill">{score} / 11</b></span>
-        </div>
+        <p id="live-recommendation" class="overview-footnote">Phase: {escape_value(market_phase)}</p>
+      </section>
+      <section id="next-action-overview" class="overview-card next-action-card">
+        <div class="overview-heading"><span>Next Action</span><strong>What to wait for next</strong></div>
+        <div class="action-copy"><span>Confirmation needed</span><strong>{escape_value(confirmation)}</strong></div>
+        <div class="action-copy"><span>Invalidation</span><strong>{escape_value(invalidation)}</strong></div>
+        <div class="level-summary-row bullish"><span>Bullish path</span><strong>{escape_value(level_value("bullish_trigger"))} / {escape_value(level_value("bullish_confirmation"))} / {escape_value(level_value("bullish_breakout"))}</strong></div>
+        <div class="level-summary-row bearish"><span>Bearish path</span><strong>{escape_value(level_value("bearish_trigger"))} / {escape_value(level_value("bearish_confirmation"))} / {escape_value(level_value("bearish_breakdown"))}</strong></div>
         {choppy_warning}
       </section>
-    </details>
+    </div>
+    <section id="key-levels-overview" class="overview-card key-levels-card">
+      <div class="overview-heading"><span>Key Levels</span><strong>Live structure map</strong></div>
+      <div class="key-levels-grid">
+        <div class="level-core"><span>Live Price</span><strong>{escape_value(live_price)}</strong></div>
+        <div class="level-core"><span>Support</span><strong>{escape_value(level_value("nearest_support"))}</strong></div>
+        <div class="level-core"><span>Resistance</span><strong>{escape_value(level_value("nearest_resistance"))}</strong></div>
+        <div class="level-path bullish"><span>Bull Trigger</span><strong>{escape_value(level_value("bullish_trigger"))}</strong></div>
+        <div class="level-path bullish"><span>Bull Confirmation</span><strong>{escape_value(level_value("bullish_confirmation"))}</strong></div>
+        <div class="level-path bullish"><span>Bull Breakout</span><strong>{escape_value(level_value("bullish_breakout"))}</strong></div>
+        <div class="level-path bearish"><span>Bear Trigger</span><strong>{escape_value(level_value("bearish_trigger"))}</strong></div>
+        <div class="level-path bearish"><span>Bear Confirmation</span><strong>{escape_value(level_value("bearish_confirmation"))}</strong></div>
+        <div class="level-path bearish"><span>Bear Breakdown</span><strong>{escape_value(level_value("bearish_breakdown"))}</strong></div>
+      </div>
+    </section>
     """
 
 
@@ -5253,7 +5289,7 @@ def build_ai_paper_benchmark(benchmark):
         trade_rows = '<tr><td colspan="12">No closed benchmark trades yet.</td></tr>'
 
     return f"""
-    <section class="ai-paper-benchmark">
+    <section id="paper-benchmark-overview" class="ai-paper-benchmark">
       <div class="benchmark-heading">
         <div>
           <span>Educational comparison only</span>
@@ -5266,6 +5302,19 @@ def build_ai_paper_benchmark(benchmark):
           <small>Cycle {escape_value(benchmark.get("cycle"))}</small>
         </div>
       </div>
+      <div class="benchmark-focus-grid">
+        <div><span>Paper Mode</span><strong>{escape_value(paper_mode_text)}</strong></div>
+        <div><span>Bias</span><strong>{escape_value(benchmark.get("benchmark_bias"))}</strong></div>
+        <div><span>Confidence</span><strong>{(parse_float(benchmark.get("benchmark_confidence")) or 0):.0f}%</strong></div>
+        <div class="wide"><span>Why Not Trading</span><strong>{escape_value(benchmark.get("paper_last_block_reason") or no_trade_reason)}</strong></div>
+        <div><span>Stop Source</span><strong>{escape_value(benchmark.get("paper_stop_source") or "none")}</strong></div>
+        <div><span>Paper Stop</span><strong>${(parse_float(benchmark.get("paper_stop")) or 0):.4f}</strong></div>
+        <div><span>Paper Target</span><strong>${(parse_float(benchmark.get("paper_target")) or 0):.4f}</strong></div>
+        <div><span>Research R/R</span><strong>{(parse_float(benchmark.get("paper_risk_reward")) or 0):.2f}</strong></div>
+      </div>
+      <details class="benchmark-detail-log">
+        <summary>Benchmark details, safeguards, and paper trade log</summary>
+        <div class="benchmark-detail-body">
       <div class="benchmark-summary-grid">
         <div><span>Starting Balance</span><strong>${(parse_float(benchmark.get("starting_balance")) or 0):,.2f}</strong></div>
         <div><span>Current Balance</span><strong>${(parse_float(benchmark.get("current_balance")) or 0):,.2f}</strong></div>
@@ -5330,6 +5379,8 @@ def build_ai_paper_benchmark(benchmark):
           <tbody>{trade_rows}</tbody>
         </table>
       </div>
+        </div>
+      </details>
     </section>
     """
 
@@ -8803,16 +8854,328 @@ def build_page():
         grid-column: span 2;
       }}
     }}
+
+    /* =========================================================
+       DARK SIGNAL UI - VISUAL LAYER ONLY
+       ========================================================= */
+    :root {{
+      --bg: #07101d;
+      --panel: #101b2b;
+      --panel-soft: #162337;
+      --text: #edf4fb;
+      --muted: #91a3b8;
+      --green: #38d996;
+      --red: #ff6b7a;
+      --amber: #f2bd55;
+      --border: rgba(151, 172, 198, 0.18);
+      --shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+      --shadow-soft: 0 10px 26px rgba(0, 0, 0, 0.20);
+    }}
+
+    html {{ scroll-behavior: smooth; background: var(--bg); }}
+    body {{
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 12% -10%, rgba(45, 115, 180, 0.22), transparent 34rem),
+        radial-gradient(circle at 92% 10%, rgba(56, 217, 150, 0.08), transparent 28rem),
+        var(--bg) !important;
+      color: var(--text) !important;
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+      line-height: 1.5;
+    }}
+    main {{ width: min(1320px, 100%); padding: 18px 24px 44px; }}
+    h1, h2, h3, strong {{ color: var(--text); }}
+    h1, h2, h3 {{ letter-spacing: -0.03em; }}
+    h2 {{ font-size: clamp(19px, 2vw, 27px) !important; }}
+    p, small, .note {{ color: var(--muted) !important; }}
+    a {{ color: inherit; }}
+    [id] {{ scroll-margin-top: 92px; }}
+    .visually-hidden {{
+      position: absolute !important;
+      width: 1px !important;
+      height: 1px !important;
+      overflow: hidden !important;
+      clip: rect(0 0 0 0) !important;
+      white-space: nowrap !important;
+    }}
+
+    .dashboard-nav {{
+      position: sticky;
+      top: 10px;
+      z-index: 50;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 18px;
+      margin-bottom: 18px;
+      padding: 11px 12px 11px 18px;
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      background: rgba(10, 19, 32, 0.88);
+      box-shadow: var(--shadow-soft);
+      backdrop-filter: blur(18px);
+    }}
+    .dashboard-brand {{
+      text-decoration: none;
+      font-weight: 900;
+      letter-spacing: -0.03em;
+      white-space: nowrap;
+    }}
+    .dashboard-brand span {{ color: var(--muted); font-weight: 650; }}
+    .dashboard-nav nav {{ display: flex; justify-content: center; gap: 4px; }}
+    .dashboard-nav nav a {{
+      padding: 8px 11px;
+      border-radius: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 750;
+      text-decoration: none;
+      transition: 160ms ease;
+    }}
+    .dashboard-nav nav a:hover {{ color: var(--text); background: var(--panel-soft); }}
+    .dashboard-nav nav {{ scrollbar-width: none; }}
+    .dashboard-nav nav::-webkit-scrollbar {{ display: none; }}
+    .refresh-button {{
+      padding: 9px 15px !important;
+      border: 1px solid rgba(56, 217, 150, 0.35) !important;
+      border-radius: 11px !important;
+      background: rgba(56, 217, 150, 0.12) !important;
+      color: var(--green) !important;
+      box-shadow: none !important;
+    }}
+    .refresh-button:hover {{ background: rgba(56, 217, 150, 0.2) !important; }}
+
+    section,
+    .detail-section,
+    .position-plan,
+    .score-section,
+    .accuracy-section,
+    .engine-section,
+    .breadth-section,
+    .pressure-section,
+    .chart-section,
+    .market-box,
+    .trend-box,
+    .confluence-checklist,
+    .top-confluence-checklist,
+    .trade-decision-meter,
+    .trade-risk-meter,
+    .pre-market-panel,
+    .mode-banner,
+    .time-discipline-card,
+    .ai-paper-benchmark {{
+      border: 1px solid var(--border) !important;
+      border-radius: 18px !important;
+      background: var(--panel) !important;
+      color: var(--text) !important;
+      box-shadow: var(--shadow-soft) !important;
+    }}
+    section {{ margin-top: 18px !important; }}
+    .detail-section {{ margin-top: 16px !important; overflow: hidden; }}
+    .detail-section summary,
+    .benchmark-detail-log > summary {{
+      padding: 17px 20px !important;
+      border: 0 !important;
+      background: linear-gradient(180deg, rgba(24, 39, 60, 0.94), rgba(16, 27, 43, 0.94)) !important;
+      color: var(--text) !important;
+      font-weight: 800 !important;
+      cursor: pointer;
+    }}
+    .detail-section[open] > summary {{ border-bottom: 1px solid var(--border) !important; }}
+    .detail-content {{ padding: 18px !important; background: transparent !important; }}
+
+    .signal-hero-shell {{
+      position: static !important;
+      max-height: none !important;
+      overflow: visible !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      border: 0 !important;
+      background: transparent !important;
+      box-shadow: none !important;
+    }}
+    .signal-hero {{
+      display: grid !important;
+      grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr) !important;
+      gap: 24px !important;
+      align-items: stretch !important;
+      margin: 0 !important;
+      padding: 30px !important;
+      border: 1px solid rgba(120, 154, 194, 0.23) !important;
+      border-radius: 22px !important;
+      background:
+        radial-gradient(circle at 90% 10%, rgba(86, 145, 211, 0.25), transparent 23rem),
+        linear-gradient(135deg, #101f34 0%, #0d192a 68%) !important;
+      box-shadow: var(--shadow) !important;
+    }}
+    .signal-hero.call {{
+      background: radial-gradient(circle at 90% 10%, rgba(56, 217, 150, 0.20), transparent 23rem), linear-gradient(135deg, #10271f, #0d192a 68%) !important;
+    }}
+    .signal-hero.put {{
+      background: radial-gradient(circle at 90% 10%, rgba(255, 107, 122, 0.20), transparent 23rem), linear-gradient(135deg, #2b171f, #0d192a 68%) !important;
+    }}
+    .signal-hero > .signal-hero-copy,
+    .signal-hero > .signal-hero-stats {{
+      min-width: 0 !important;
+      padding: 0 !important;
+      border: 0 !important;
+      background: transparent !important;
+    }}
+    .signal-hero-copy {{ display: flex; flex-direction: column; justify-content: center; min-width: 0; }}
+    .signal-hero-kicker {{ display: flex; flex-wrap: wrap; align-items: center; gap: 9px; color: var(--muted); font-size: 12px; font-weight: 750; }}
+    .signal-hero-kicker strong {{ color: var(--text); }}
+    .feed-dot {{ width: 9px; height: 9px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 5px rgba(255, 107, 122, .10); }}
+    .feed-dot.live {{ background: var(--green); box-shadow: 0 0 0 5px rgba(56, 217, 150, .10); }}
+    .signal-hero h1 {{ margin: 17px 0 12px; color: var(--text) !important; font-size: clamp(34px, 5vw, 60px) !important; line-height: 1 !important; font-weight: 860 !important; }}
+    .signal-hero-copy > p {{ max-width: 760px; margin: 0; color: #c6d3e1 !important; font-size: 16px; line-height: 1.65; }}
+    .signal-hero-meta {{ display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 20px; color: var(--muted); font-size: 11px; }}
+    .signal-hero-meta b {{ color: #cbd7e5; }}
+    .signal-hero-stats {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
+    .hero-stat {{ display: flex; flex-direction: column; justify-content: center; min-height: 104px; padding: 17px; border: 1px solid var(--border); border-radius: 16px; background: rgba(255, 255, 255, 0.045); }}
+    .hero-stat:first-child {{ grid-column: 1; grid-row: 1; }}
+    .hero-stat:last-child {{ grid-column: 2; grid-row: 1; }}
+    .hero-signal {{ grid-column: 1 / -1; grid-row: 2; }}
+    .hero-stat span {{ color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }}
+    .hero-stat strong {{ margin-top: 7px; font-size: clamp(22px, 2.5vw, 34px); line-height: 1; letter-spacing: -.04em; white-space: nowrap; }}
+    .hero-signal.call strong {{ color: var(--green); }}
+    .hero-signal.put strong {{ color: var(--red); }}
+    .hero-signal.wait strong {{ color: var(--amber); }}
+    .hero-signal strong {{ overflow-wrap: normal !important; word-break: normal; }}
+    .data-stale-warning {{ margin: 10px 0 0 !important; border-radius: 12px !important; background: rgba(255, 107, 122, .12) !important; color: var(--red) !important; }}
+
+    .dashboard-primary-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }}
+    .overview-card {{ margin: 0 !important; padding: 22px !important; }}
+    .overview-heading {{ display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 18px; }}
+    .overview-heading > span {{ color: var(--muted); font-size: 12px; font-weight: 850; letter-spacing: .09em; text-transform: uppercase; }}
+    .overview-heading > strong {{ text-align: right; }}
+    .signal-badge {{ display: inline-flex; align-items: center; justify-content: center; min-width: 92px; padding: 9px 15px; border-radius: 999px; font-size: 22px; }}
+    .signal-badge.call {{ color: var(--green); background: rgba(56, 217, 150, .12); border: 1px solid rgba(56, 217, 150, .26); }}
+    .signal-badge.put {{ color: var(--red); background: rgba(255, 107, 122, .12); border: 1px solid rgba(255, 107, 122, .26); }}
+    .signal-badge.wait {{ color: var(--amber); background: rgba(242, 189, 85, .12); border: 1px solid rgba(242, 189, 85, .26); }}
+    .overview-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }}
+    .overview-grid > div,
+    .key-levels-grid > div,
+    .benchmark-focus-grid > div {{ padding: 13px 14px; border: 1px solid var(--border); border-radius: 13px; background: var(--panel-soft); }}
+    .overview-grid span,
+    .key-levels-grid span,
+    .benchmark-focus-grid span {{ display: block; color: var(--muted); font-size: 11px; font-weight: 750; margin-bottom: 5px; }}
+    .overview-grid strong,
+    .key-levels-grid strong,
+    .benchmark-focus-grid strong {{ display: block; overflow-wrap: anywhere; }}
+    .overview-footnote {{ margin: 14px 0 0; font-size: 12px; }}
+    .action-copy {{ margin-bottom: 10px; padding: 13px 14px; border-left: 3px solid #4c6f96; border-radius: 0 12px 12px 0; background: rgba(255,255,255,.03); }}
+    .action-copy span, .level-summary-row span {{ display: block; color: var(--muted); font-size: 11px; margin-bottom: 4px; }}
+    .action-copy strong {{ font-size: 13px; line-height: 1.5; }}
+    .level-summary-row {{ display: flex; justify-content: space-between; gap: 14px; margin-top: 8px; padding: 10px 12px; border-radius: 11px; background: rgba(255,255,255,.035); }}
+    .level-summary-row span {{ margin: 0; }}
+    .level-summary-row strong {{ font-size: 12px; text-align: right; }}
+    .bullish strong, .level-path.bullish strong {{ color: var(--green) !important; }}
+    .bearish strong, .level-path.bearish strong {{ color: var(--red) !important; }}
+    .no-trade-warning {{ margin-top: 12px !important; border: 1px solid rgba(242, 189, 85, .24) !important; border-radius: 12px !important; background: rgba(242, 189, 85, .08) !important; color: var(--amber) !important; }}
+
+    .key-levels-card {{ margin-top: 16px !important; padding: 22px !important; }}
+    .key-levels-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }}
+    .level-core {{ background: rgba(91, 132, 177, .12) !important; }}
+
+    .engine-section {{ padding: 22px !important; }}
+    .engine-grid {{ gap: 12px !important; }}
+    .engine-score, .engine-counts > div {{ border: 1px solid var(--border) !important; border-radius: 14px !important; background: var(--panel-soft) !important; }}
+    .engine-score strong {{ color: var(--text) !important; }}
+    .engine-section .note {{ margin: 12px 0 4px; font-size: 11px; }}
+
+    .ai-paper-benchmark {{ padding: 24px !important; }}
+    .benchmark-heading {{ margin-bottom: 18px; }}
+    .benchmark-focus-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }}
+    .benchmark-focus-grid .wide {{ grid-column: span 2; }}
+    .benchmark-status {{ border: 1px solid var(--border) !important; background: var(--panel-soft) !important; }}
+    .benchmark-detail-log {{ margin-top: 16px; border: 1px solid var(--border); border-radius: 15px; overflow: hidden; background: rgba(4, 10, 18, .18); }}
+    .benchmark-detail-body {{ padding: 18px; }}
+    .benchmark-summary-grid > div,
+    .benchmark-position-grid > div,
+    .benchmark-equity-panel {{ border: 1px solid var(--border) !important; background: var(--panel-soft) !important; color: var(--text) !important; }}
+
+    .table-wrap {{ border: 1px solid var(--border); border-radius: 14px; overflow: auto; background: rgba(6, 13, 23, .32); }}
+    table {{ width: 100%; color: var(--text) !important; border-collapse: collapse; }}
+    th {{ background: #17263a !important; color: #b9c8d8 !important; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }}
+    td {{ color: #dce6f0 !important; }}
+    th, td {{ padding: 11px 12px !important; border-color: var(--border) !important; }}
+    tbody tr:nth-child(even) {{ background: rgba(255,255,255,.025); }}
+    tbody tr:hover {{ background: rgba(91, 132, 177, .09); }}
+    .engine-group th {{ background: #132236 !important; }}
+    .engine-status {{ border-radius: 999px !important; padding: 5px 9px !important; }}
+    .engine-status.bullish {{ color: var(--green) !important; background: rgba(56,217,150,.1) !important; }}
+    .engine-status.bearish {{ color: var(--red) !important; background: rgba(255,107,122,.1) !important; }}
+    .engine-status.neutral {{ color: var(--amber) !important; background: rgba(242,189,85,.1) !important; }}
+
+    .education-box,
+    .mtf-card,
+    .intraday-midpoint-card,
+    .direction-level,
+    .alert-pressure-window,
+    .confluence-factor,
+    .engine-card,
+    .breadth-card,
+    .stop-education {{
+      border: 1px solid var(--border) !important;
+      border-radius: 14px !important;
+      background: var(--panel-soft) !important;
+      color: var(--text) !important;
+      box-shadow: none !important;
+    }}
+    .empty {{ color: var(--muted) !important; background: rgba(255,255,255,.025) !important; border: 1px dashed var(--border) !important; }}
+    input, select {{ color: var(--text) !important; background: var(--panel-soft) !important; border-color: var(--border) !important; }}
+    .dashboard-footer {{ color: #6f849b; }}
+
+    @media (max-width: 900px) {{
+      .dashboard-nav {{ grid-template-columns: 1fr auto; }}
+      .dashboard-nav nav {{ grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; overflow-x: auto; padding-bottom: 2px; }}
+      .signal-hero {{ grid-template-columns: 1fr !important; }}
+      .dashboard-primary-grid {{ grid-template-columns: 1fr; }}
+      .benchmark-focus-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+    }}
+
+    @media (max-width: 620px) {{
+      main {{ padding: 10px 12px 30px; }}
+      .dashboard-nav {{ top: 6px; gap: 10px; padding: 9px 10px 9px 13px; border-radius: 15px; }}
+      .dashboard-nav nav a {{ padding: 7px 9px; font-size: 12px; }}
+      .signal-hero {{ padding: 21px !important; border-radius: 18px !important; }}
+      .signal-hero h1 {{ font-size: 36px !important; }}
+      .signal-hero-stats {{ grid-template-columns: 1fr 1fr; }}
+      .hero-stat {{ min-height: 88px; padding: 13px; }}
+      .hero-stat strong {{ font-size: 24px; }}
+      .overview-card, .key-levels-card, .engine-section, .ai-paper-benchmark {{ padding: 17px !important; }}
+      .overview-grid, .key-levels-grid, .benchmark-focus-grid {{ grid-template-columns: 1fr 1fr; }}
+      .benchmark-focus-grid .wide {{ grid-column: 1 / -1; }}
+      .level-summary-row {{ display: block; }}
+      .level-summary-row strong {{ display: block; margin-top: 4px; text-align: left; }}
+      .detail-content, .benchmark-detail-body {{ padding: 12px !important; }}
+      th, td {{ padding: 9px 10px !important; white-space: nowrap; }}
+    }}
+
+    @media (max-width: 420px) {{
+      .overview-grid, .key-levels-grid, .benchmark-focus-grid {{ grid-template-columns: 1fr; }}
+      .benchmark-focus-grid .wide {{ grid-column: auto; }}
+      .dashboard-brand span {{ display: none; }}
+    }}
 </style>
 </head>
 <body>
-  <main>
-    <div class="top-actions">
+  <main id="dashboard-top">
+    <header class="dashboard-nav">
+      <a class="dashboard-brand" href="#dashboard-top">SPY <span>Signal Lab</span></a>
+      <nav aria-label="Dashboard sections">
+        <a href="#dashboard-overview">Dashboard</a>
+        <a href="#signal-overview">Signal</a>
+        <a href="#key-levels-overview">Levels</a>
+        <a href="#section-engine-health">Engine</a>
+        <a href="#paper-benchmark-overview">Paper</a>
+        <a href="#section-recent-signal-history">History</a>
+      </nav>
       <button class="refresh-button" id="refresh-button" type="button"
               onclick="refreshDashboard()">
         Refresh
       </button>
-    </div>
+    </header>
     <div id="dashboard-content">{dashboard_content}</div>
     <footer class="dashboard-footer">
       <strong>SPY Dashboard
@@ -9215,7 +9578,7 @@ def build_page():
         const headline = document.getElementById("live-market-phase");
         const recommendation = document.getElementById("live-recommendation");
         const reason = document.getElementById("live-signal-reason");
-        if (headline) headline.textContent = modeText;
+        if (headline) headline.textContent = mode;
         if (recommendation) recommendation.textContent = `Phase: ${{status.market_phase_display || "Range"}}`;
         if (reason) reason.textContent = modeReason || "Waiting for confirmation.";
         const summary = banner.closest(".sticky-signal-summary");
