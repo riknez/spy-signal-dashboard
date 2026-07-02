@@ -5327,7 +5327,9 @@ def build_ai_paper_benchmark(benchmark):
         <div><span>Mode</span><strong>{escape_value(paper_mode_text)}</strong></div>
         <div><span>Bias</span><strong>{escape_value(benchmark.get("benchmark_bias"))}</strong></div>
         <div><span>Confidence</span><strong>{(parse_float(benchmark.get("benchmark_confidence")) or 0):.0f}%</strong></div>
-        <div class="wide"><span>Trade Status</span><strong>{escape_value(benchmark.get("paper_last_block_reason") or no_trade_reason)}</strong></div>
+        <div class="wide"><span>Why Blocked</span><strong>{escape_value(benchmark.get("paper_last_block_reason") or no_trade_reason)}</strong></div>
+        <div class="wide"><span>Missing Condition</span><strong>{escape_value(benchmark.get("next_condition_needed") or "None")}</strong></div>
+        <div class="wide"><span>Entry Rule Active</span><strong>{escape_value(benchmark.get("paper_entry_rule_used") or "None")}</strong></div>
         <div><span>Stop Source</span><strong>{escape_value(benchmark.get("paper_stop_source") or "none")}</strong></div>
         <div><span>Paper Stop</span><strong>${(parse_float(benchmark.get("paper_stop")) or 0):.4f}</strong></div>
         <div><span>Paper Target</span><strong>${(parse_float(benchmark.get("paper_target")) or 0):.4f}</strong></div>
@@ -6504,47 +6506,52 @@ def build_dashboard_content():
         "Recent Alert History",
         recent_alert_history
     )
+    scanner_details = build_collapsible(
+        "Scanner Details",
+        time_discipline_card
+        + trade_decision_meter
+        + trade_risk_meter
+        + top_confluence_checklist
+        + prediction_card
+        + position_plan
+        + intraday_midpoints
+        + daily_midpoint
+        + pre_market_panel
+        + top_education_guides
+        + chart_details
+        + score_details
+        + structure_details
+        + support_resistance_details
+        + market_box_details
+        + trend_box_details
+        + chart_reading_details
+        + mtf_details
+        + reversal_details
+        + regime_details
+        + stability_details
+        + vwap_details
+        + opening_range_details
+        + breadth_details
+        + pressure_details
+        + accuracy_details
+        + market_replay_details
+        + historical_archive_details
+    )
+    engine_details = build_collapsible("Engine Health", engine_health_section)
+    paper_benchmark_details = build_collapsible(
+        "Paper Benchmark",
+        ai_paper_benchmark
+    )
 
     return f"""
     {sticky_signal_summary}
-    <div class="dashboard-secondary-grid">
-      {ai_paper_benchmark}
-      {engine_health_section}
-    </div>
-    <div class="dashboard-lower">
-      {chart_details}
-      <div class="dashboard-advanced-stack">
-        {time_discipline_card}
-        {trade_decision_meter}
-        {trade_risk_meter}
-        {top_confluence_checklist}
-        {prediction_card}
-        {position_plan}
-        {intraday_midpoints}
-        {daily_midpoint}
-        {pre_market_panel}
-        {top_education_guides}
-        {score_details}
-        {structure_details}
-        {support_resistance_details}
-        {market_box_details}
-        {trend_box_details}
-        {chart_reading_details}
-        {mtf_details}
-        {reversal_details}
-        {regime_details}
-        {stability_details}
-        {vwap_details}
-        {opening_range_details}
-        {breadth_details}
-        {pressure_details}
-        {accuracy_details}
-        {market_replay_details}
-        {historical_archive_details}
-        {recent_signal_history_details}
-        {recent_alert_history_details}
-        {logs_details}
-      </div>
+    <div class="dashboard-tertiary-stack">
+      {scanner_details}
+      {engine_details}
+      {paper_benchmark_details}
+      {recent_signal_history_details}
+      {recent_alert_history_details}
+      {logs_details}
     </div>
     """
 
@@ -9074,6 +9081,10 @@ def build_page():
     .dashboard-secondary-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: 22px; }}
     .dashboard-lower {{ margin-top: 22px; }}
     .dashboard-advanced-stack {{ display: grid; gap: 18px; margin-top: 18px; }}
+    .dashboard-tertiary-stack {{ display: grid; gap: 12px; margin-top: 24px; }}
+    .dashboard-tertiary-stack > .detail-section {{ margin-top: 0 !important; }}
+    .dashboard-tertiary-stack .detail-content > .ai-paper-benchmark,
+    .dashboard-tertiary-stack .detail-content > .engine-section {{ margin-top: 0 !important; }}
     .overview-card {{ margin: 0 !important; padding: 28px !important; }}
     .overview-heading {{ display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 18px; }}
     .overview-heading > span {{ color: var(--muted); font-size: 12px; font-weight: 850; letter-spacing: .09em; text-transform: uppercase; }}
@@ -9236,6 +9247,7 @@ def build_page():
       .dashboard-nav nav {{ grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; overflow-x: auto; padding-bottom: 2px; }}
       .signal-hero {{ grid-template-columns: 1fr !important; }}
       .dashboard-primary-grid,
+      .dashboard-primary-grid.dashboard-row-two,
       .dashboard-secondary-grid {{ grid-template-columns: 1fr; }}
       .benchmark-focus-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
     }}
@@ -9271,6 +9283,114 @@ def build_page():
       .benchmark-focus-grid .wide {{ grid-column: auto; }}
       .dashboard-brand span {{ display: none; }}
     }}
+
+    /* =========================================================
+       READABILITY FIX (contrast only, no layout/behavior change)
+       Several legacy light-background sub-cards (confluence score
+       boxes, trade-risk headline, checklist chips, midpoint/archive
+       grids, etc.) never set their own text color and were designed
+       against the page's original dark-navy body text. The newer
+       dark-theme layer above forces body text to near-white, which
+       left those light boxes with pale-on-pale / white-on-white
+       text. This block restores dark, readable text inside those
+       specific light boxes only; every other card is untouched.
+       ========================================================= */
+    .top-confluence-final,
+    .top-confluence-scores span,
+    .top-confluence-factor,
+    .decision-meter-heading > div,
+    .decision-meter-scores > div,
+    .confluence-summary,
+    .confluence-scores > div,
+    .confluence-factor,
+    .market-box-grid > div,
+    .market-box-status,
+    .trend-box-grid > div,
+    .archive-day,
+    .archive-grid > div,
+    .a-plus-filter,
+    .a-plus-filter > div,
+    .intraday-midpoints,
+    .intraday-midpoint-values > div,
+    .daily-midpoint,
+    .daily-recap-grid > div,
+    .midpoint-grid > div,
+    .replay-summary-grid {{
+      color: #17202a !important;
+    }}
+    .top-confluence-final b,
+    .top-confluence-factor strong,
+    .decision-meter-heading > div strong,
+    .decision-meter-scores > div strong,
+    .confluence-summary strong,
+    .confluence-scores > div strong,
+    .market-box-grid > div strong,
+    .market-box-status strong,
+    .trend-box-grid > div strong,
+    .archive-grid > div h3,
+    .archive-day > h3,
+    .pressure-panel h3,
+    .correction-monitor strong,
+    .a-plus-filter strong,
+    .intraday-midpoint-values > div strong,
+    .daily-recap-grid > div strong,
+    .midpoint-grid > div strong,
+    .replay-summary-grid strong {{
+      color: #17202a !important;
+    }}
+    .confluence-summary p,
+    .archive-grid > div p,
+    .archive-day > p,
+    .archive-day > ul,
+    .correction-monitor p {{
+      color: #3d4a56 !important;
+    }}
+    .trade-risk-heading strong,
+    .trade-risk-heading p,
+    .trade-risk-heading span {{
+      color: inherit !important;
+    }}
+
+    /* =========================================================
+       READABILITY FIX PART 2 (dark-section corrections)
+       .mtf-monitor, .reversal-monitor, and .top-confluence-checklist
+       are <section> elements, so the dark-panel rule earlier in this
+       stylesheet already gives them readable light text by default.
+       The block above previously also forced dark-navy text onto
+       elements nested inside them, which made that text invisible
+       against their (actually dark) background and, worse, beat the
+       more-specific CALL/PUT/WAIT status-color rules on nested
+       badges, since !important always wins over specificity. This
+       section removes that over-correction and instead only
+       lightens the handful of labels/paragraphs in those dark
+       sections that were still using their old light-theme gray.
+       ========================================================= */
+    .top-confluence-heading strong {{
+      color: var(--text) !important;
+    }}
+    .top-confluence-heading > div:first-child > span,
+    .mtf-heading span,
+    .mtf-card span,
+    .mtf-card p,
+    .reversal-monitor p,
+    .trade-risk-meter ul {{
+      color: var(--muted) !important;
+    }}
+    .engine-score span,
+    .engine-score em,
+    .engine-counts span,
+    .engine-score.neutral strong,
+    .engine-counts .neutral strong {{
+      color: var(--muted) !important;
+    }}
+
+    /* CALL/PUT/WAIT "next price area" lines were losing their
+       green/red/amber status color to the global
+       p, small, .note dark-muted-text rule used by the dark
+       theme layer above. */
+    .what-next .next-bullish {{ color: #137a4b !important; }}
+    .what-next .next-bearish {{ color: #b83a3a !important; }}
+    .what-next .next-chop {{ color: #a06f00 !important; }}
 </style>
 </head>
 <body>
@@ -9279,10 +9399,7 @@ def build_page():
       <a class="dashboard-brand" href="#dashboard-top">SPY <span>Signal Lab</span></a>
       <nav aria-label="Dashboard sections">
         <a href="#dashboard-overview">Dashboard</a>
-        <a href="#signal-overview">Signal</a>
-        <a href="#key-levels-overview">Levels</a>
-        <a href="#section-engine-health">Engine</a>
-        <a href="#paper-benchmark-overview">Paper</a>
+        <a href="#section-scanner-details">Scanner</a>
         <a href="#section-recent-signal-history">History</a>
       </nav>
       <button class="refresh-button" id="refresh-button" type="button"
@@ -10095,7 +10212,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
