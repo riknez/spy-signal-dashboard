@@ -98,6 +98,8 @@ CORRECTION_MIN_MOVE = 0.05
 correction_activation = {"mode": "NEUTRAL", "time": None}
 last_live_api_status = None
 last_daily_midpoint_analysis = None
+dashboard_engine_source = "local_csv"
+dashboard_engine_unique_count = 0
 ai_benchmark_lock = Lock()
 
 AI_BENCHMARK_STARTING_BALANCE = 1000.0
@@ -393,6 +395,10 @@ def read_a_plus_results():
 
 
 def read_engine_health():
+    global dashboard_engine_source, dashboard_engine_unique_count
+
+    local_rows = []
+
     if os.path.exists(ENGINE_HEALTH_FILE):
         try:
             with open(ENGINE_HEALTH_FILE, "r", newline="") as file:
@@ -400,15 +406,45 @@ def read_engine_health():
         except (OSError, csv.Error):
             local_rows = []
 
-        if local_rows:
-            latest_by_ticker = {}
+    def latest_rows_by_ticker(rows):
+        latest_by_ticker = {}
+        latest_keys = {}
 
-            for row in local_rows:
-                ticker = row.get("ticker")
-                if ticker:
-                    latest_by_ticker[ticker] = row
+        for row_index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
 
-            return list(latest_by_ticker.values())
+            ticker = row.get("ticker") or row.get("symbol")
+            if not ticker:
+                continue
+
+            normalized_row = dict(row)
+            normalized_row.setdefault("ticker", ticker)
+            timestamp = str(
+                row.get("time")
+                or row.get("timestamp")
+                or row.get("last_update")
+                or row.get("updated_at")
+                or ""
+            )
+            row_key = (timestamp, row_index)
+
+            if ticker not in latest_keys or row_key >= latest_keys[ticker]:
+                latest_keys[ticker] = row_key
+                latest_by_ticker[ticker] = normalized_row
+
+        return list(latest_by_ticker.values())
+
+    local_engine_rows = latest_rows_by_ticker(local_rows)
+    server_mode = (
+        os.name != "nt"
+        or os.environ.get("RENDER", "").strip().lower() in {"1", "true", "yes"}
+    )
+
+    if local_engine_rows and not server_mode:
+        dashboard_engine_source = "local_csv"
+        dashboard_engine_unique_count = len(local_engine_rows)
+        return local_engine_rows
 
     live_status = read_live_status()
     pushed_rows = live_status.get("latest_engine_health_rows")
@@ -423,16 +459,21 @@ def read_engine_health():
     else:
         pushed_rows = []
 
-    latest_by_ticker = {}
+    pushed_engine_rows = latest_rows_by_ticker(pushed_rows)
+    prefer_pushed = pushed_engine_rows and (
+        not local_engine_rows
+        or len(pushed_rows) > len(local_rows)
+        or len(pushed_engine_rows) > len(local_engine_rows)
+    )
 
-    for row in pushed_rows:
-        ticker = row.get("ticker") or row.get("symbol")
-        if ticker:
-            normalized_row = dict(row)
-            normalized_row.setdefault("ticker", ticker)
-            latest_by_ticker[ticker] = normalized_row
+    if prefer_pushed:
+        dashboard_engine_source = "pushed_live_status"
+        dashboard_engine_unique_count = len(pushed_engine_rows)
+        return pushed_engine_rows
 
-    return list(latest_by_ticker.values())
+    dashboard_engine_source = "local_csv"
+    dashboard_engine_unique_count = len(local_engine_rows)
+    return local_engine_rows
 
 
 def read_market_breadth():
@@ -5576,6 +5617,7 @@ def get_live_level_status():
     bullish_confidence = confidence if trend == "UP" else max(0, 100 - confidence)
     bearish_confidence = confidence if trend == "DOWN" else max(0, 100 - confidence)
     pushed_engine_rows = live_status.get("latest_engine_health_rows")
+    engine_health_rows = read_engine_health()
     response = {
         "available": True,
         "live_price": parse_float(displayed_price),
@@ -5655,10 +5697,12 @@ def get_live_level_status():
         "analysis_age": get_analysis_age_seconds(latest),
         "analysis_age_seconds": get_analysis_age_seconds(latest),
         "last_updated": live_status.get("updated_at") if live_status else "N/A",
-        "engine_health_row_count": len(read_engine_health()),
+        "engine_health_row_count": len(engine_health_rows),
         "latest_engine_health_rows_count": (
             len(pushed_engine_rows) if isinstance(pushed_engine_rows, list) else 0
         ),
+        "dashboard_engine_source": dashboard_engine_source,
+        "dashboard_engine_unique_count": dashboard_engine_unique_count,
         **get_dashboard_build_metadata(),
         **get_live_status_debug_fields(live_status),
         **get_eastern_clock_fields(),
