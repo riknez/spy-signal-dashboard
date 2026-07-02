@@ -68,6 +68,19 @@ def read_last_csv_row(path):
         return {}
 
 
+def read_recent_csv_rows(path, limit=25):
+    try:
+        with open(path, "r", encoding="utf-8-sig", newline="") as file:
+            rows = list(csv.DictReader(file))
+
+        return rows[-limit:] if limit > 0 else []
+    except FileNotFoundError:
+        return []
+    except (OSError, csv.Error) as error:
+        print(f"Could not read CSV file {path}: {error}")
+        return []
+
+
 def read_latest_csv_rows_by_key(path, key):
     try:
         with open(path, "r", encoding="utf-8-sig", newline="") as file:
@@ -111,8 +124,10 @@ def build_payload():
     status = read_json_file(STATUS_FILE)
     scan = read_last_csv_row(SCAN_LOG_FILE)
     prediction = read_last_csv_row(PREDICTION_FILE)
-    breadth = read_last_csv_row(MARKET_BREADTH_FILE)
-    engine_rows = read_latest_csv_rows_by_key(ENGINE_HEALTH_FILE, "ticker")
+    breadth_rows = read_recent_csv_rows(MARKET_BREADTH_FILE)
+    engine_rows = read_recent_csv_rows(ENGINE_HEALTH_FILE)
+    breadth = breadth_rows[-1] if breadth_rows else {}
+    engine = engine_rows[-1] if engine_rows else {}
     alert = read_last_csv_row(ALERTS_FILE)
     level_hits = read_json_file(LEVEL_HITS_FILE)
 
@@ -182,7 +197,9 @@ def build_payload():
         "latest_scan": scan,
         "latest_prediction": prediction,
         "latest_market_breadth": breadth,
-        "latest_engine_health": engine_rows,
+        "latest_engine_health": engine,
+        "latest_market_breadth_rows": breadth_rows,
+        "latest_engine_health_rows": engine_rows,
         "latest_alert": alert,
         "latest_level_hits": level_hits,
     }
@@ -200,10 +217,9 @@ def build_payload():
         payload.setdefault(key, value)
         payload.setdefault(f"breadth_{key}", value)
 
-    if engine_rows:
-        for key, value in engine_rows[-1].items():
-            payload.setdefault(key, value)
-            payload.setdefault(f"engine_{key}", value)
+    for key, value in engine.items():
+        payload.setdefault(key, value)
+        payload.setdefault(f"engine_{key}", value)
 
     # Render dashboard aliases.
     # Local scanner uses bullish_/bearish_ names.

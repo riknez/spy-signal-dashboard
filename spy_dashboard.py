@@ -362,7 +362,9 @@ def read_live_status():
         "stale": data_age > LIVE_STATUS_DISCONNECTED_SECONDS,
         "stale_reason": stale_reason,
         "latest_engine_health": status.get("latest_engine_health"),
-        "latest_market_breadth": status.get("latest_market_breadth")
+        "latest_market_breadth": status.get("latest_market_breadth"),
+        "latest_engine_health_rows": status.get("latest_engine_health_rows"),
+        "latest_market_breadth_rows": status.get("latest_market_breadth_rows")
     }
 
 
@@ -391,30 +393,74 @@ def read_a_plus_results():
 
 
 def read_engine_health():
-    if not os.path.exists(ENGINE_HEALTH_FILE):
-        return []
+    if os.path.exists(ENGINE_HEALTH_FILE):
+        try:
+            with open(ENGINE_HEALTH_FILE, "r", newline="") as file:
+                local_rows = list(csv.DictReader(file))
+        except (OSError, csv.Error):
+            local_rows = []
 
-    with open(ENGINE_HEALTH_FILE, "r", newline="") as file:
-        rows = list(csv.DictReader(file))
+        if local_rows:
+            latest_by_ticker = {}
+
+            for row in local_rows:
+                ticker = row.get("ticker")
+                if ticker:
+                    latest_by_ticker[ticker] = row
+
+            return list(latest_by_ticker.values())
+
+    live_status = read_live_status()
+    pushed_rows = live_status.get("latest_engine_health_rows")
+
+    if not isinstance(pushed_rows, list) or not pushed_rows:
+        pushed_rows = live_status.get("latest_engine_health")
+
+    if isinstance(pushed_rows, dict):
+        pushed_rows = [pushed_rows] if pushed_rows else []
+    elif isinstance(pushed_rows, list):
+        pushed_rows = [row for row in pushed_rows if isinstance(row, dict)]
+    else:
+        pushed_rows = []
 
     latest_by_ticker = {}
 
-    for row in rows:
-        ticker = row.get("ticker")
+    for row in pushed_rows:
+        ticker = row.get("ticker") or row.get("symbol")
         if ticker:
-            latest_by_ticker[ticker] = row
+            normalized_row = dict(row)
+            normalized_row.setdefault("ticker", ticker)
+            latest_by_ticker[ticker] = normalized_row
 
     return list(latest_by_ticker.values())
 
 
 def read_market_breadth():
-    if not os.path.exists(MARKET_BREADTH_FILE):
-        return None
+    rows = []
 
-    with open(MARKET_BREADTH_FILE, "r", newline="") as file:
-        rows = list(csv.DictReader(file))
+    if os.path.exists(MARKET_BREADTH_FILE):
+        try:
+            with open(MARKET_BREADTH_FILE, "r", newline="") as file:
+                rows = list(csv.DictReader(file))
+        except (OSError, csv.Error):
+            rows = []
 
-    return rows[-1] if rows else None
+    if rows:
+        return rows[-1]
+
+    live_status = read_live_status()
+    pushed_row = live_status.get("latest_market_breadth")
+
+    if isinstance(pushed_row, dict) and pushed_row:
+        return pushed_row
+
+    pushed_rows = live_status.get("latest_market_breadth_rows")
+
+    if isinstance(pushed_rows, list):
+        valid_rows = [row for row in pushed_rows if isinstance(row, dict) and row]
+        return valid_rows[-1] if valid_rows else None
+
+    return None
 
 
 def write_json_atomic(path, payload):
@@ -5529,6 +5575,7 @@ def get_live_level_status():
     confidence = parse_float(latest.get("confidence")) or 0
     bullish_confidence = confidence if trend == "UP" else max(0, 100 - confidence)
     bearish_confidence = confidence if trend == "DOWN" else max(0, 100 - confidence)
+    pushed_engine_rows = live_status.get("latest_engine_health_rows")
     response = {
         "available": True,
         "live_price": parse_float(displayed_price),
@@ -5608,6 +5655,10 @@ def get_live_level_status():
         "analysis_age": get_analysis_age_seconds(latest),
         "analysis_age_seconds": get_analysis_age_seconds(latest),
         "last_updated": live_status.get("updated_at") if live_status else "N/A",
+        "engine_health_row_count": len(read_engine_health()),
+        "latest_engine_health_rows_count": (
+            len(pushed_engine_rows) if isinstance(pushed_engine_rows, list) else 0
+        ),
         **get_dashboard_build_metadata(),
         **get_live_status_debug_fields(live_status),
         **get_eastern_clock_fields(),
@@ -5662,19 +5713,6 @@ def build_dashboard_content():
     a_plus_result_rows = read_a_plus_results()
     engine_rows = read_engine_health()
     breadth_row = read_market_breadth()
-    if not engine_rows:
-        pushed_engine_rows = live_status.get("latest_engine_health")
-
-        if isinstance(pushed_engine_rows, list):
-            engine_rows = [row for row in pushed_engine_rows if isinstance(row, dict)]
-        elif isinstance(pushed_engine_rows, dict) and pushed_engine_rows:
-            engine_rows = [pushed_engine_rows]
-
-    if not breadth_row:
-        pushed_breadth_row = live_status.get("latest_market_breadth")
-
-        if isinstance(pushed_breadth_row, dict) and pushed_breadth_row:
-            breadth_row = pushed_breadth_row
     update_historical_market_archive(rows, alert_rows, result_rows)
     latest = dict(rows[-1]) if rows else None
 
