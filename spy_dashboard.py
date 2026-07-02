@@ -1,4 +1,4 @@
-import base64
+﻿import base64
 import binascii
 import csv
 import html
@@ -331,7 +331,7 @@ def read_live_status():
     feed_status = (
         "FEED LIVE"
         if data_age <= LIVE_STATUS_STALE_SECONDS
-        else "PRICE LIVE — ANALYSIS DELAYED"
+        else "PRICE LIVE â€” ANALYSIS DELAYED"
         if analysis_delayed
         else "DASHBOARD FEED DISCONNECTED"
     )
@@ -1872,12 +1872,12 @@ def get_level_activation_states(latest, current_price):
     )
 
     if last_hit_bull_level >= 3:
-        states["bull_trigger"] = ("done-bull-level", "DONE ✅")
-        states["bull_confirm"] = ("done-bull-level", "DONE ✅")
+        states["bull_trigger"] = ("done-bull-level", "DONE âœ…")
+        states["bull_confirm"] = ("done-bull-level", "DONE âœ…")
         states["bull_breakout"] = ("active-bull-level level-glow", "BREAKOUT ACTIVE")
         states["bull_status"] = "BREAKOUT ACTIVE"
     elif last_hit_bull_level >= 2:
-        states["bull_trigger"] = ("done-bull-level", "DONE ✅")
+        states["bull_trigger"] = ("done-bull-level", "DONE âœ…")
         states["bull_confirm"] = (
             "active-bull-level level-glow" if bull_recent else "done-bull-level level-fade-done",
             "CONFIRMED" if bull_recent else "DONE &#9989;"
@@ -1886,17 +1886,17 @@ def get_level_activation_states(latest, current_price):
     elif last_hit_bull_level >= 1:
         states["bull_trigger"] = (
             "active-bull-level level-glow" if bull_recent else "done-bull-level level-fade-done",
-            "TRIGGER HIT" if bull_recent else "DONE âœ…"
+            "TRIGGER HIT" if bull_recent else "DONE Ã¢Å“â€¦"
         )
         states["bull_status"] = "TRIGGER HIT" if bull_recent else "DONE"
 
     if last_hit_bear_level >= 3:
-        states["bear_trigger"] = ("done-bear-level", "DONE ✅")
-        states["bear_confirm"] = ("done-bear-level", "DONE ✅")
+        states["bear_trigger"] = ("done-bear-level", "DONE âœ…")
+        states["bear_confirm"] = ("done-bear-level", "DONE âœ…")
         states["bear_breakdown"] = ("active-bear-level level-glow", "BREAKDOWN ACTIVE")
         states["bear_status"] = "BREAKDOWN ACTIVE"
     elif last_hit_bear_level >= 2:
-        states["bear_trigger"] = ("done-bear-level", "DONE ✅")
+        states["bear_trigger"] = ("done-bear-level", "DONE âœ…")
         states["bear_confirm"] = (
             "active-bear-level level-glow" if bear_recent else "done-bear-level level-fade-done",
             "CONFIRMED" if bear_recent else "DONE &#9989;"
@@ -1905,7 +1905,7 @@ def get_level_activation_states(latest, current_price):
     elif last_hit_bear_level >= 1:
         states["bear_trigger"] = (
             "active-bear-level level-glow" if bear_recent else "done-bear-level level-fade-done",
-            "TRIGGER HIT" if bear_recent else "DONE âœ…"
+            "TRIGGER HIT" if bear_recent else "DONE Ã¢Å“â€¦"
         )
         states["bear_status"] = "TRIGGER HIT" if bear_recent else "DONE"
 
@@ -2031,7 +2031,7 @@ def get_trade_risk_override(latest, regime):
 
 def get_top_banner_state(regime, trade_risk, level_states, latest=None, current_price=None):
     if latest and latest.get("_data_stale"):
-        return "WAIT", "DATA STALE — DO NOT TRADE", "Live price data is older than 180 seconds."
+        return "WAIT", "DATA STALE â€” DO NOT TRADE", "Live price data is older than 180 seconds."
 
     stability = (latest.get("mode_stability") or "LOW").upper() if latest else "LOW"
     one_min_trend = (latest.get("mtf_1m_status") or "Neutral").upper() if latest else "NEUTRAL"
@@ -2041,7 +2041,7 @@ def get_top_banner_state(regime, trade_risk, level_states, latest=None, current_
     if regime.upper() == "CHOPPY":
         return (
             "WAIT",
-            "NEUTRAL / CHOP — WAIT FOR CONFIRMATION",
+            "NEUTRAL / CHOP â€” WAIT FOR CONFIRMATION",
             "No clean trade yet. Need breakout or breakdown confirmation."
         )
 
@@ -2050,13 +2050,13 @@ def get_top_banner_state(regime, trade_risk, level_states, latest=None, current_
         if advantage == "SELLERS" or regime.upper() == "TRENDING DOWN":
             return (
                 "WAIT",
-                "BEARISH BIAS — NO TRADE UNTIL BREAKDOWN CONFIRMS",
+                "BEARISH BIAS â€” NO TRADE UNTIL BREAKDOWN CONFIRMS",
                 "Chop or low stability prevents a clean PUT entry."
             )
         if advantage == "BUYERS" or regime.upper() == "TRENDING UP":
             return (
                 "WAIT",
-                "BULLISH BIAS — NO TRADE UNTIL BREAKOUT CONFIRMS",
+                "BULLISH BIAS â€” NO TRADE UNTIL BREAKOUT CONFIRMS",
                 "Chop or low stability prevents a clean CALL entry."
             )
         return "WAIT", "WAIT", "No clean trade yet. Need breakout or breakdown confirmation."
@@ -2092,9 +2092,9 @@ def get_top_banner_state(regime, trade_risk, level_states, latest=None, current_
 
     if trade_risk == "NO TRADE":
         if bearish_structure:
-            return "WAIT", "BEARISH BIAS — NO TRADE UNTIL BREAKDOWN CONFIRMS", "Low stability or participation blocks PUT MODE."
+            return "WAIT", "BEARISH BIAS â€” NO TRADE UNTIL BREAKDOWN CONFIRMS", "Low stability or participation blocks PUT MODE."
         if bullish_structure:
-            return "WAIT", "BULLISH BIAS — NO TRADE UNTIL BREAKOUT CONFIRMS", "Low stability or participation blocks CALL MODE."
+            return "WAIT", "BULLISH BIAS â€” NO TRADE UNTIL BREAKOUT CONFIRMS", "Low stability or participation blocks CALL MODE."
         return "WAIT", "WAIT", "No clean trade yet. Need breakout or breakdown confirmation."
 
     price = parse_float(current_price)
@@ -2179,7 +2179,7 @@ def get_trade_decision_data(latest, regime, trade_risk, level_states=None):
         advantage = "Sellers"
     elif breakdown_active and breakdown_extended:
         mode = "WAIT"
-        header = "PUT WATCH — WAIT FOR RETEST"
+        header = "PUT WATCH â€” WAIT FOR RETEST"
         final_read = "PUT WATCH"
         reason = "Bearish breakdown active, but do not chase extended candle."
         advantage = "Sellers"
@@ -2197,7 +2197,7 @@ def get_trade_decision_data(latest, regime, trade_risk, level_states=None):
         mode = "CALL" if strict_bullish_override else (
             "CALL" if support_hold and not trend_extended and trade_risk != "NO TRADE" else "WAIT"
         )
-        header = trend_action or "TRENDING UP — CALL WATCH"
+        header = trend_action or "TRENDING UP â€” CALL WATCH"
         final_read = "CALL CONFIRMATION" if mode == "CALL" else "BULLISH TREND / CALL WATCH"
         reason = trend_reason + (
             " Risk controls and structure-based stops remain required."
@@ -2206,13 +2206,13 @@ def get_trade_decision_data(latest, regime, trade_risk, level_states=None):
         advantage = "Buyers"
     elif trend_override and trend_direction == "BEARISH":
         mode = "PUT" if resistance_hold and not trend_extended and trade_risk != "NO TRADE" else "WAIT"
-        header = trend_action or "TRENDING DOWN — PUT WATCH"
+        header = trend_action or "TRENDING DOWN â€” PUT WATCH"
         final_read = "PUT CONFIRMATION" if mode == "PUT" else "BEARISH TREND / PUT WATCH"
         reason = trend_reason
         advantage = "Sellers"
     elif hard_wait:
         mode = "WAIT"
-        header = "NEUTRAL / CHOP — WAIT FOR CONFIRMATION"
+        header = "NEUTRAL / CHOP â€” WAIT FOR CONFIRMATION"
         final_read = "MIXED / WAIT"
         reason = "Market regime is CHOPPY or trade risk is NO TRADE."
         advantage = "Mixed"
@@ -2242,7 +2242,7 @@ def get_trade_decision_data(latest, regime, trade_risk, level_states=None):
         advantage = "Buyers"
     else:
         mode = "WAIT"
-        header = "NEUTRAL / CHOP — WAIT FOR CONFIRMATION"
+        header = "NEUTRAL / CHOP â€” WAIT FOR CONFIRMATION"
         final_read = "MIXED / WAIT"
         reason = (latest.get("a_plus_wait_reason") or "No side has enough confluence.") if latest else "Waiting for confluence data."
         advantage = "Mixed"
@@ -3029,7 +3029,7 @@ def build_sticky_signal_summary(latest, regime_data, live_status, decision=None,
         <span>SPY</span>
         <strong id="top-live-spy-price">{escape_value(live_price)}</strong>
         <small>Updated <b id="top-last-updated">{escape_value(live_status.get("updated_at") if live_status else "N/A")}</b></small>
-        <small class="dashboard-version">Dashboard <b id="top-dashboard-version">v{escape_value(DASHBOARD_VERSION)}</b> · <span id="top-build-source">{escape_value(DASHBOARD_BUILD_SOURCE)}</span></small>
+        <small class="dashboard-version">Dashboard <b id="top-dashboard-version">v{escape_value(DASHBOARD_VERSION)}</b> Â· <span id="top-build-source">{escape_value(DASHBOARD_BUILD_SOURCE)}</span></small>
       </div>
     </div>
     <div class="sticky-pills">
@@ -3391,7 +3391,7 @@ def evaluate_dashboard_trend_override(latest, rows, alert_rows=None):
     })
     if bullish_override:
         action = "CALL CONFIRMATION" if support_hold and not bullish_extended else (
-            "CALL WATCH — WAIT FOR PULLBACK / RETEST" if bullish_extended else "TRENDING UP — CALL WATCH"
+            "CALL WATCH â€” WAIT FOR PULLBACK / RETEST" if bullish_extended else "TRENDING UP â€” CALL WATCH"
         )
         result.update({
             "dashboard_trend_override": True,
@@ -3410,7 +3410,7 @@ def evaluate_dashboard_trend_override(latest, rows, alert_rows=None):
         })
     elif bearish_override:
         action = "PUT CONFIRMATION" if (resistance_hold or latest.get("bearish_retest_failed")) and not bearish_extended else (
-            "PUT WATCH — WAIT FOR PULLBACK / RETEST" if bearish_extended else "TRENDING DOWN — PUT WATCH"
+            "PUT WATCH â€” WAIT FOR PULLBACK / RETEST" if bearish_extended else "TRENDING DOWN â€” PUT WATCH"
         )
         result.update({
             "dashboard_trend_override": True,
@@ -5464,7 +5464,7 @@ def get_live_level_status():
             "data_age": live_status.get("data_age"),
             "last_updated": live_status.get("updated_at", frozen_status.get("last_updated", "N/A")),
             "banner": "WAIT",
-            "banner_text": "DATA STALE — DO NOT TRADE",
+            "banner_text": "DATA STALE â€” DO NOT TRADE",
             "banner_reason": "Live price data is older than 180 seconds.",
             "current_banner_reason": "Live price data is older than 180 seconds.",
             "trade_risk": "NO TRADE",
@@ -7806,7 +7806,417 @@ def build_page():
         padding: 10px;
       }}
     }}
-  </style>
+  
+    /* =========================================================
+       SOFT MODERN UI OVERRIDE - PHASE 1
+       Visual cleanup only.
+       ========================================================= */
+
+    :root {{
+      --soft-bg: #f4f7fb;
+      --soft-card: #ffffff;
+      --soft-border: #dbe7f3;
+      --soft-text: #111827;
+      --soft-muted: #64748b;
+      --soft-blue: #2798ff;
+      --soft-green: #16a34a;
+      --soft-red: #dc2626;
+      --soft-navy: #071426;
+      --soft-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+      --soft-shadow-small: 0 8px 18px rgba(15, 23, 42, 0.06);
+    }}
+
+    body {{
+      background:
+        radial-gradient(circle at top left, rgba(39, 152, 255, 0.12), transparent 34rem),
+        linear-gradient(180deg, #f8fbff 0%, #f4f7fb 45%, #edf4fb 100%) !important;
+      color: var(--soft-text) !important;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif !important;
+      letter-spacing: -0.01em;
+    }}
+
+    h1, h2, h3 {{
+      letter-spacing: -0.035em;
+    }}
+
+    h1 {{
+      font-size: clamp(34px, 5vw, 62px) !important;
+      line-height: 1 !important;
+      font-weight: 850 !important;
+    }}
+
+    h2 {{
+      font-size: clamp(22px, 3vw, 34px) !important;
+      line-height: 1.08 !important;
+      font-weight: 820 !important;
+    }}
+
+    p {{
+      color: var(--soft-muted);
+    }}
+
+    section,
+    .detail-section,
+    .decision-panel,
+    .position-plan,
+    .score-section,
+    .accuracy-section,
+    .engine-section,
+    .breadth-section,
+    .pressure-section,
+    .chart-section,
+    .market-box,
+    .trend-box,
+    .confluence-checklist,
+    .top-confluence-checklist,
+    .trade-decision-meter,
+    .trade-risk-meter,
+    .pre-market-panel,
+    .mode-banner,
+    .time-discipline-card {{
+      border-radius: 24px !important;
+      border: 1px solid var(--soft-border) !important;
+      background: rgba(255, 255, 255, 0.94) !important;
+      box-shadow: var(--soft-shadow-small) !important;
+    }}
+
+    section {{
+      margin-top: 18px !important;
+    }}
+
+    .detail-section {{
+      overflow: hidden !important;
+      margin-top: 18px !important;
+    }}
+
+    .detail-section summary {{
+      min-height: 58px;
+      padding: 18px 20px !important;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%) !important;
+      color: var(--soft-text) !important;
+      font-weight: 800 !important;
+      border-bottom: 1px solid transparent !important;
+    }}
+
+    .detail-section[open] summary {{
+      border-bottom: 1px solid var(--soft-border) !important;
+    }}
+
+    .decision-panel {{
+      padding: 28px !important;
+      border: 0 !important;
+      box-shadow: var(--soft-shadow) !important;
+      color: white !important;
+    }}
+
+    .decision-panel h2,
+    .decision-panel h3,
+    .decision-panel p,
+    .decision-panel span,
+    .decision-panel strong {{
+      color: inherit !important;
+    }}
+
+    .decision-panel.call {{
+      background:
+        radial-gradient(circle at top right, rgba(34, 197, 94, 0.30), transparent 18rem),
+        linear-gradient(135deg, #062015, #0a3d2a 52%, #0f5132) !important;
+    }}
+
+    .decision-panel.put {{
+      background:
+        radial-gradient(circle at top right, rgba(248, 113, 113, 0.34), transparent 18rem),
+        linear-gradient(135deg, #2a0b0b, #5f1515 52%, #7f1d1d) !important;
+    }}
+
+    .decision-panel.wait {{
+      background:
+        radial-gradient(circle at top right, rgba(39, 152, 255, 0.28), transparent 18rem),
+        linear-gradient(135deg, #071426, #10243f 55%, #1e3a5f) !important;
+    }}
+
+    .time-discipline-card {{
+      background: linear-gradient(135deg, #ffffff, #f6fbff) !important;
+      border-left: 6px solid var(--soft-blue) !important;
+      padding: 22px !important;
+    }}
+
+    .market-box,
+    .trend-box,
+    .position-plan,
+    .score-section,
+    .accuracy-section,
+    .engine-section,
+    .breadth-section,
+    .pressure-section,
+    .chart-section {{
+      padding: 24px !important;
+    }}
+
+    .position-plan {{
+      background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%) !important;
+    }}
+
+    .mtf-card,
+    .intraday-midpoint-card,
+    .direction-level,
+    .alert-pressure-window,
+    .confluence-factor,
+    .engine-card,
+    .breadth-card {{
+      border-radius: 18px !important;
+      border: 1px solid var(--soft-border) !important;
+      background: #ffffff !important;
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.045) !important;
+    }}
+
+    .direction-level {{
+      padding: 16px !important;
+    }}
+
+    button,
+    .button,
+    .refresh-button,
+    .refresh-btn,
+    a.button {{
+      border-radius: 999px !important;
+      border: 0 !important;
+      box-shadow: 0 10px 24px rgba(39, 152, 255, 0.18) !important;
+    }}
+
+    .empty {{
+      color: #7c8da0 !important;
+      background: #f8fbff !important;
+      border: 1px dashed var(--soft-border) !important;
+      border-radius: 18px !important;
+      padding: 18px !important;
+    }}
+
+    @media (max-width: 760px) {{
+      body {{
+        font-size: 15px !important;
+      }}
+
+      section,
+      .detail-section,
+      .decision-panel,
+      .position-plan,
+      .score-section,
+      .accuracy-section,
+      .engine-section,
+      .breadth-section,
+      .pressure-section,
+      .chart-section,
+      .market-box,
+      .trend-box,
+      .confluence-checklist,
+      .top-confluence-checklist,
+      .trade-decision-meter,
+      .trade-risk-meter,
+      .pre-market-panel,
+      .mode-banner,
+      .time-discipline-card {{
+        border-radius: 22px !important;
+      }}
+
+      .decision-panel {{
+        padding: 24px 20px !important;
+      }}
+
+      .market-box,
+      .trend-box,
+      .position-plan,
+      .score-section,
+      .accuracy-section,
+      .engine-section,
+      .breadth-section,
+      .pressure-section,
+      .chart-section {{
+        padding: 20px !important;
+      }}
+
+      .detail-section summary {{
+        padding: 17px 18px !important;
+        font-size: 16px !important;
+      }}
+    }}
+
+    /* =========================================================
+       SPY HERO SUMMARY - PHASE 2
+       Top hierarchy only. No scanner logic changed.
+       ========================================================= */
+
+    .spy-hero {{
+      border: 0 !important;
+      border-radius: 32px !important;
+      padding: 34px !important;
+      margin-bottom: 22px !important;
+      color: #ffffff !important;
+      background:
+        radial-gradient(circle at top right, rgba(87, 211, 216, 0.30), transparent 22rem),
+        linear-gradient(135deg, #071426 0%, #102b52 55%, #0f5ea8 100%) !important;
+      box-shadow: 0 22px 48px rgba(15, 23, 42, 0.18) !important;
+      overflow: hidden !important;
+    }}
+
+    .spy-hero.call {{
+      background:
+        radial-gradient(circle at top right, rgba(34, 197, 94, 0.36), transparent 22rem),
+        linear-gradient(135deg, #052015 0%, #075033 55%, #0d7a4a 100%) !important;
+    }}
+
+    .spy-hero.put {{
+      background:
+        radial-gradient(circle at top right, rgba(248, 113, 113, 0.38), transparent 22rem),
+        linear-gradient(135deg, #2a0b0b 0%, #651717 55%, #9f1d1d 100%) !important;
+    }}
+
+    .spy-hero.wait {{
+      background:
+        radial-gradient(circle at top right, rgba(39, 152, 255, 0.34), transparent 22rem),
+        linear-gradient(135deg, #071426 0%, #10243f 55%, #1f5f99 100%) !important;
+    }}
+
+    .spy-hero * {{
+      color: inherit !important;
+    }}
+
+    .spy-hero-shell {{
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 26px;
+      align-items: stretch;
+    }}
+
+    .spy-hero-topline {{
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      font-size: 12px;
+      font-weight: 900;
+      opacity: 0.78;
+      margin-bottom: 14px;
+    }}
+
+    .spy-hero h1 {{
+      margin: 0;
+      font-size: clamp(42px, 7vw, 82px) !important;
+      line-height: 0.92 !important;
+      letter-spacing: -0.06em;
+      font-weight: 900 !important;
+    }}
+
+    .spy-hero-subtitle {{
+      max-width: 680px;
+      margin: 18px 0 0;
+      font-size: clamp(16px, 2vw, 21px);
+      line-height: 1.45;
+      opacity: 0.88;
+    }}
+
+    .spy-hero-pills {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 22px;
+    }}
+
+    .spy-hero-pills span {{
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      background: rgba(255, 255, 255, 0.12);
+      backdrop-filter: blur(12px);
+      border-radius: 999px;
+      padding: 9px 13px;
+      font-size: 12px;
+      font-weight: 900;
+    }}
+
+    .spy-hero-metrics {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }}
+
+    .spy-hero-metric {{
+      min-height: 112px;
+      border-radius: 22px;
+      padding: 18px;
+      background: rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      box-shadow: 0 10px 22px rgba(0, 0, 0, 0.10);
+    }}
+
+    .spy-hero-metric.primary {{
+      grid-column: span 2;
+    }}
+
+    .spy-hero-metric span {{
+      display: block;
+      font-size: 12px;
+      font-weight: 850;
+      text-transform: uppercase;
+      letter-spacing: 0.10em;
+      opacity: 0.72;
+      margin-bottom: 10px;
+    }}
+
+    .spy-hero-metric strong {{
+      display: block;
+      font-size: clamp(26px, 4vw, 44px);
+      line-height: 1;
+      font-weight: 900;
+      letter-spacing: -0.05em;
+    }}
+
+    .spy-hero-reason {{
+      margin-top: 26px;
+      padding: 22px;
+      border-radius: 24px;
+      background: rgba(255, 255, 255, 0.10);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+    }}
+
+    .spy-hero-reason h2 {{
+      margin: 0 0 12px;
+      font-size: 18px !important;
+      letter-spacing: -0.02em;
+    }}
+
+    .spy-hero-reason ul {{
+      margin: 0;
+      padding-left: 19px;
+      display: grid;
+      gap: 7px;
+      opacity: 0.92;
+    }}
+
+    .spy-hero-reason li {{
+      line-height: 1.42;
+    }}
+
+    @media (max-width: 760px) {{
+      .spy-hero {{
+        border-radius: 28px !important;
+        padding: 26px 20px !important;
+      }}
+
+      .spy-hero-shell {{
+        grid-template-columns: 1fr;
+      }}
+
+      .spy-hero-metrics {{
+        grid-template-columns: 1fr 1fr;
+      }}
+
+      .spy-hero-metric {{
+        min-height: 94px;
+        padding: 16px;
+      }}
+
+      .spy-hero-metric.primary {{
+        grid-column: span 2;
+      }}
+    }}
+</style>
 </head>
 <body>
   <main>
@@ -7820,8 +8230,8 @@ def build_page():
     <footer class="dashboard-footer">
       <strong>SPY Dashboard
       <b id="footer-dashboard-version">v{escape_value(DASHBOARD_VERSION)}</b></strong>
-      · Build <span id="footer-build-time">{escape_value(DASHBOARD_BUILD_TIME)}</span>
-      · <span id="footer-build-source">{escape_value(DASHBOARD_BUILD_SOURCE)}</span>
+      Â· Build <span id="footer-build-time">{escape_value(DASHBOARD_BUILD_TIME)}</span>
+      Â· <span id="footer-build-source">{escape_value(DASHBOARD_BUILD_SOURCE)}</span>
       <span>Host: <b id="footer-dashboard-hostname">{escape_value(DASHBOARD_HOSTNAME)}</b></span>
       <span>File: <b id="footer-dashboard-file">{escape_value(DASHBOARD_FILE)}</b></span>
     </footer>
@@ -8132,11 +8542,11 @@ def build_page():
         nowSeconds - Number(liveLevelHitTimestamps.bear[String(lastHitBearLevel)] || 0) < 30;
 
       const states = {{
-        bull_trigger: lastHitBullLevel >= 2 ? ["done-bull-level", "DONE ✅"] : lastHitBullLevel >= 1 ? ["active-bull-level", "HIT"] : ["waiting-level", "WAITING"],
-        bull_confirm: lastHitBullLevel >= 3 ? ["done-bull-level", "DONE ✅"] : lastHitBullLevel >= 2 ? ["active-bull-level", "CONFIRMED"] : ["waiting-level", "WAITING"],
+        bull_trigger: lastHitBullLevel >= 2 ? ["done-bull-level", "DONE âœ…"] : lastHitBullLevel >= 1 ? ["active-bull-level", "HIT"] : ["waiting-level", "WAITING"],
+        bull_confirm: lastHitBullLevel >= 3 ? ["done-bull-level", "DONE âœ…"] : lastHitBullLevel >= 2 ? ["active-bull-level", "CONFIRMED"] : ["waiting-level", "WAITING"],
         bull_breakout: lastHitBullLevel >= 3 ? ["active-bull-level", "BREAKOUT"] : ["waiting-level", "WAITING"],
-        bear_trigger: lastHitBearLevel >= 2 ? ["done-bear-level", "DONE ✅"] : lastHitBearLevel >= 1 ? ["active-bear-level", "HIT"] : ["waiting-level", "WAITING"],
-        bear_confirm: lastHitBearLevel >= 3 ? ["done-bear-level", "DONE ✅"] : lastHitBearLevel >= 2 ? ["active-bear-level", "CONFIRMED"] : ["waiting-level", "WAITING"],
+        bear_trigger: lastHitBearLevel >= 2 ? ["done-bear-level", "DONE âœ…"] : lastHitBearLevel >= 1 ? ["active-bear-level", "HIT"] : ["waiting-level", "WAITING"],
+        bear_confirm: lastHitBearLevel >= 3 ? ["done-bear-level", "DONE âœ…"] : lastHitBearLevel >= 2 ? ["active-bear-level", "CONFIRMED"] : ["waiting-level", "WAITING"],
         bear_breakdown: lastHitBearLevel >= 3 ? ["active-bear-level", "BREAKDOWN"] : ["waiting-level", "WAITING"]
       }};
       const doneLabel = "DONE " + String.fromCodePoint(0x2705);
@@ -8387,7 +8797,7 @@ def build_page():
         console.error("Live level status refresh failed", error);
         const staleWarning = document.getElementById("top-stale-warning");
         if (staleWarning) {{
-          staleWarning.textContent = "STATUS REFRESH FAILED — RETRYING";
+          staleWarning.textContent = "STATUS REFRESH FAILED â€” RETRYING";
           staleWarning.classList.remove("live", "disconnected");
           staleWarning.classList.add("delayed");
           staleWarning.classList.add("visible");
@@ -8621,3 +9031,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
