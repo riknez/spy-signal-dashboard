@@ -2,11 +2,16 @@ import csv
 import json
 import os
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
 
 
-LOG_DIR = os.path.join("logs", "spy")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Absolute so this always reads the same file the scanner writes,
+# regardless of what folder this pusher was launched from.
+LOG_DIR = os.path.join(BASE_DIR, "logs", "spy")
 
 STATUS_FILE = os.path.join(LOG_DIR, "spy_live_status.json")
 SCAN_LOG_FILE = os.path.join(LOG_DIR, "spy_options_scan_log.csv")
@@ -21,8 +26,74 @@ LEVEL_HITS_FILE = os.path.join(LOG_DIR, "spy_level_hits.json")
 
 DEFAULT_UPDATE_URL = "https://YOUR-SPY-RENDER-URL.onrender.com/api/push-status"
 
-PUSH_EVERY_SECONDS = 10
+PUSH_EVERY_SECONDS = 3
 STALE_AFTER_SECONDS = 180
+# spy_dashboard.py's local panels that need more than the single latest
+# row (Trend Box, Market Box, SPY Chart, regime detection feeding
+# Structure/Level Detail) look back well past the old 50-row window -
+# see calculate_daily_midpoint_source/build_trend_box/build_live_chart/
+# detect_regime in spy_dashboard.py. This does not change any of that
+# logic, only how much of the same data reaches Render.
+PREDICTION_HISTORY_LIMIT = 1500
+# Matches the regular-session window calculate_daily_midpoint_source
+# uses locally (9:30 AM-4:00 PM ET) so "yesterday" means the same thing
+# on Render that it means on the local dashboard.
+REGULAR_SESSION_START = datetime.min.time().replace(hour=9, minute=30)
+REGULAR_SESSION_END = datetime.min.time().replace(hour=16, minute=0)
+
+# Scanning the full predictions file for the previous session is only
+# worth doing once per calendar day - it does not change until today
+# rolls into tomorrow - so it is cached rather than repeated every
+# PUSH_EVERY_SECONDS cycle.
+_previous_session_cache_date = None
+_previous_session_cache_rows = []
+
+
+def read_previous_session_rows(path):
+    global _previous_session_cache_date, _previous_session_cache_rows
+
+    today_et = datetime.now(ZoneInfo("America/New_York")).date()
+    if _previous_session_cache_date == today_et:
+        return _previous_session_cache_rows
+
+    print(
+        f"Scanning {path} for the previous regular session "
+        f"(once per day, cached the rest of today)...",
+        flush=True,
+    )
+    sessions = {}
+    try:
+        with open(path, "r", encoding="utf-8-sig", newline="") as file:
+            for row in csv.DictReader(file):
+                timestamp_text = row.get("time") or ""
+                try:
+                    timestamp = datetime.strptime(timestamp_text, "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    continue
+                if not (REGULAR_SESSION_START <= timestamp.time() <= REGULAR_SESSION_END):
+                    continue
+                row_date = timestamp.date()
+                if row_date >= today_et:
+                    continue
+                sessions.setdefault(row_date, []).append(row)
+    except (OSError, csv.Error) as error:
+        print(f"Could not scan {path} for previous session: {error}", flush=True)
+        _previous_session_cache_date = today_et
+        _previous_session_cache_rows = []
+        return []
+
+    if not sessions:
+        print("No previous regular-session rows found yet.", flush=True)
+        _previous_session_cache_date = today_et
+        _previous_session_cache_rows = []
+        return []
+
+    previous_date = max(sessions)
+    rows = sessions[previous_date]
+    print(f"Previous session found: {previous_date} ({len(rows)} rows)", flush=True)
+    _previous_session_cache_date = today_et
+    _previous_session_cache_rows = rows
+    return rows
 
 
 def load_env_file():
@@ -125,11 +196,24 @@ def build_payload():
     now = time.time()
 
     status = read_json_file(STATUS_FILE)
+    if os.path.isfile(STATUS_FILE):
+        status_mtime = time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(STATUS_FILE))
+        )
+    else:
+        status_mtime = "FILE NOT FOUND"
+    print(f"SPY status file: {STATUS_FILE}", flush=True)
+    print(f"SPY status file last write time: {status_mtime}", flush=True)
+    print(
+        f"SPY last_update being pushed: {status.get('last_update', '(none)')}",
+        flush=True,
+    )
     scan = read_last_csv_row(SCAN_LOG_FILE)
     prediction = read_last_csv_row(PREDICTION_FILE)
     breadth_rows = read_recent_csv_rows(MARKET_BREADTH_FILE, 25)
     engine_rows = read_recent_csv_rows(ENGINE_HEALTH_FILE, 25)
-    prediction_history = read_recent_csv_rows(PREDICTION_FILE, 50)
+    prediction_history = read_recent_csv_rows(PREDICTION_FILE, PREDICTION_HISTORY_LIMIT)
+    previous_session_rows = read_previous_session_rows(PREDICTION_FILE)
     alert_history = read_recent_csv_rows(ALERTS_FILE, 50)
     alert_result_history = read_recent_csv_rows(ALERT_RESULTS_FILE, 50)
     accuracy_history = read_recent_csv_rows(ACCURACY_FILE, 50)
@@ -209,11 +293,17 @@ def build_payload():
         "latest_market_breadth_rows": breadth_rows,
         "latest_engine_health_rows": engine_rows,
         "latest_prediction_history": prediction_history,
+        # Previous trading day's regular-session rows, so Render can
+        # compute the same "yesterday" comparisons
+        # (calculate_daily_midpoint_source / Market Box) that the local
+        # dashboard computes from its own full-history file.
+        "latest_prediction_previous_session": previous_session_rows,
         "latest_alert_history": alert_history,
         "latest_alert_result_history": alert_result_history,
         "latest_accuracy_history": accuracy_history,
         "latest_paper_trade_history": paper_trade_history,
         "latest_prediction_history_count": len(prediction_history),
+        "latest_prediction_previous_session_count": len(previous_session_rows),
         "latest_alert_history_count": len(alert_history),
         "latest_alert_result_history_count": len(alert_result_history),
         "latest_paper_trade_history_count": len(paper_trade_history),
@@ -260,6 +350,17 @@ def build_payload():
         if value not in ("", None, "N/A", "NA", "--"):
             payload[render_key] = value
 
+    print(f"Payload keys ({len(payload)}): {sorted(payload.keys())}", flush=True)
+    print(
+        "Payload row counts: "
+        f"prediction_history={len(prediction_history)}, "
+        f"previous_session={len(previous_session_rows)}, "
+        f"alert_history={len(alert_history)}, "
+        f"engine_health_rows={len(engine_rows)}, "
+        f"market_breadth_rows={len(breadth_rows)}",
+        flush=True,
+    )
+
     return payload
 
 
@@ -295,8 +396,10 @@ def push_status(payload):
             timeout=15,
         )
     except requests.RequestException as error:
-        print(f"Push failed: {error}")
+        print(f"Push failed (no response from Render): {error}", flush=True)
         return False
+
+    print(f"Render response status: {response.status_code}", flush=True)
 
     if response.status_code == 200:
         print(
