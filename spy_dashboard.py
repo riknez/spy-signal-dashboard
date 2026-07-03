@@ -10,9 +10,10 @@ import secrets
 import socket
 import time
 from datetime import datetime
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Lock
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo
 
 
@@ -55,24 +56,34 @@ DASHBOARD_BUILD_SOURCE = os.getenv(
     "local" if os.name == "nt" else "godaddy"
 ).strip().lower() or "local"
 
-PREDICTION_FILE = os.path.join("logs", "spy", "spy_direction_predictions.csv")
-ALERT_FILE = os.path.join("logs", "spy", "spy_options_alerts.csv")
-RESULT_FILE = os.path.join("logs", "spy", "spy_options_alert_results.csv")
-A_PLUS_RESULT_FILE = os.path.join("logs", "spy", "spy_options_a_plus_results.csv")
-ENGINE_HEALTH_FILE = os.path.join("logs", "spy", "spy_engine_health.csv")
-MARKET_BREADTH_FILE = os.path.join("logs", "spy", "spy_market_breadth.csv")
+# Script-relative absolute paths so these always resolve to this project's
+# own logs/spy folder regardless of the process's current working directory.
+PREDICTION_FILE = app_path("logs", "spy", "spy_direction_predictions.csv")
+ALERT_FILE = app_path("logs", "spy", "spy_options_alerts.csv")
+RESULT_FILE = app_path("logs", "spy", "spy_options_alert_results.csv")
+A_PLUS_RESULT_FILE = app_path("logs", "spy", "spy_options_a_plus_results.csv")
+ENGINE_HEALTH_FILE = app_path("logs", "spy", "spy_engine_health.csv")
+MARKET_BREADTH_FILE = app_path("logs", "spy", "spy_market_breadth.csv")
 LIVE_STATUS_FILE = app_path("logs", "spy", "spy_live_status.json")
-LEVEL_HITS_FILE = os.path.join("logs", "spy", "spy_level_hits.json")
-HISTORY_DIR = os.path.join("logs", "spy", "history")
-AI_BENCHMARK_STATE_FILE = os.path.join("logs", "spy", "ai_paper_benchmark_state.json")
-AI_BENCHMARK_TRADES_FILE = os.path.join("logs", "spy", "ai_paper_benchmark_trades.csv")
-AI_BENCHMARK_CYCLES_FILE = os.path.join("logs", "spy", "ai_paper_benchmark_cycles.json")
+LEVEL_HITS_FILE = app_path("logs", "spy", "spy_level_hits.json")
+HISTORY_DIR = app_path("logs", "spy", "history")
+AI_BENCHMARK_STATE_FILE = app_path("logs", "spy", "ai_paper_benchmark_state.json")
+AI_BENCHMARK_TRADES_FILE = app_path("logs", "spy", "ai_paper_benchmark_trades.csv")
+AI_BENCHMARK_CYCLES_FILE = app_path("logs", "spy", "ai_paper_benchmark_cycles.json")
 LIVE_STATUS_STALE_SECONDS = 60
 LIVE_STATUS_DISCONNECTED_SECONDS = 180
 HOST = os.getenv("DASHBOARD_HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", os.getenv("DASHBOARD_PORT", "8000")))
 DASHBOARD_USERNAME = ""
 DASHBOARD_PASSWORD = ""
+# Browser login (cookie/session), separate from the Basic-Auth pair above
+# (which stays inert - DASHBOARD_PASSWORD is never set - and from the
+# X-Dashboard-Token check on POST /api/push-status, which this does not
+# touch). SESSION_TOKEN is generated fresh per process start, so existing
+# sessions end whenever the dashboard restarts.
+SESSION_COOKIE_NAME = "spy_dashboard_session"
+SESSION_TOKEN = secrets.token_urlsafe(32)
+SPY_DASHBOARD_PASSWORD = os.environ.get("SPY_DASHBOARD_PASSWORD", "scanner2026")
 level_set_id = None
 previous_level_set_id = None
 level_set_values = None
@@ -244,7 +255,7 @@ def read_predictions():
     if not os.path.exists(PREDICTION_FILE):
         return []
 
-    with open(PREDICTION_FILE, "r", newline="") as file:
+    with open(PREDICTION_FILE, "r", newline="", encoding="utf-8-sig") as file:
         return list(csv.DictReader(file))
 
 
@@ -384,7 +395,7 @@ def read_alerts():
     if not os.path.exists(ALERT_FILE):
         return []
 
-    with open(ALERT_FILE, "r", newline="") as file:
+    with open(ALERT_FILE, "r", newline="", encoding="utf-8-sig") as file:
         return list(csv.DictReader(file))
 
 
@@ -392,7 +403,7 @@ def read_results():
     if not os.path.exists(RESULT_FILE):
         return []
 
-    with open(RESULT_FILE, "r", newline="") as file:
+    with open(RESULT_FILE, "r", newline="", encoding="utf-8-sig") as file:
         return list(csv.DictReader(file))
 
 
@@ -400,7 +411,7 @@ def read_a_plus_results():
     if not os.path.exists(A_PLUS_RESULT_FILE):
         return []
 
-    with open(A_PLUS_RESULT_FILE, "r", newline="") as file:
+    with open(A_PLUS_RESULT_FILE, "r", newline="", encoding="utf-8-sig") as file:
         return list(csv.DictReader(file))
 
 
@@ -411,7 +422,7 @@ def read_engine_health():
 
     if os.path.exists(ENGINE_HEALTH_FILE):
         try:
-            with open(ENGINE_HEALTH_FILE, "r", newline="") as file:
+            with open(ENGINE_HEALTH_FILE, "r", newline="", encoding="utf-8-sig") as file:
                 local_rows = list(csv.DictReader(file))
         except (OSError, csv.Error):
             local_rows = []
@@ -491,7 +502,7 @@ def read_market_breadth():
 
     if os.path.exists(MARKET_BREADTH_FILE):
         try:
-            with open(MARKET_BREADTH_FILE, "r", newline="") as file:
+            with open(MARKET_BREADTH_FILE, "r", newline="", encoding="utf-8-sig") as file:
                 rows = list(csv.DictReader(file))
         except (OSError, csv.Error):
             rows = []
@@ -943,6 +954,14 @@ def archive_ai_benchmark_cycle(state, failed_reason):
     write_json_atomic(AI_BENCHMARK_CYCLES_FILE, cycles)
 
 
+def get_daily_pnl_map(state):
+    # state["daily_pnl"] is meant to be a {date: pnl} dict, but has been
+    # observed as a plain number (e.g. a stale/partially-migrated state
+    # file), which would otherwise crash the two .get() lookups below.
+    daily_pnl = state.get("daily_pnl")
+    return daily_pnl if isinstance(daily_pnl, dict) else {}
+
+
 def calculate_ai_benchmark_metrics(state):
     trades = state.get("closed_trades") or []
     wins = [trade for trade in trades if trade.get("result") == "WIN"]
@@ -982,7 +1001,7 @@ def calculate_ai_benchmark_metrics(state):
         "consecutive_losses": consecutive_losses,
         "best_trade": max((parse_float(trade.get("pnl")) or 0 for trade in trades), default=0),
         "worst_trade": min((parse_float(trade.get("pnl")) or 0 for trade in trades), default=0),
-        "daily_pnl": parse_float((state.get("daily_pnl") or {}).get(market_date_text())) or 0
+        "daily_pnl": parse_float(get_daily_pnl_map(state).get(market_date_text())) or 0
     }
 
 
@@ -1006,7 +1025,7 @@ def get_ai_benchmark_daily_stats(state):
         "trades_today": trades_today,
         "closed_trades_today": len(daily_trades),
         "consecutive_losses_today": consecutive_losses,
-        "daily_pnl": parse_float((state.get("daily_pnl") or {}).get(today)) or 0
+        "daily_pnl": parse_float(get_daily_pnl_map(state).get(today)) or 0
     }
 
 
@@ -1498,6 +1517,8 @@ def close_ai_benchmark_position(state, current_spy_price, exit_reason):
     state["last_trade"] = trade
     state["last_event"] = f"Paper trade closed: {trade['direction']} {trade['result']} ({trade['reason']})"
     state["open_position"] = None
+    if not isinstance(state.get("daily_pnl"), dict):
+        state["daily_pnl"] = {}
     state["daily_pnl"][market_date_text()] = round(
         (parse_float(state["daily_pnl"].get(market_date_text())) or 0) + pnl,
         2
@@ -3436,6 +3457,7 @@ def build_compact_sticky_signal_summary(latest, regime_data, live_status, decisi
           <div class="hero-stat"><span>SPY Price</span><strong id="top-live-spy-price">{escape_value(live_price)}</strong></div>
           <div class="hero-stat"><span>Confidence</span><strong>{confidence:.0f}%</strong></div>
         </div>
+        <p class="note signal-hero-data-note">Price source: yfinance 1-minute SPY bars. Price source may update slower than 3 seconds.</p>
       </div>
       <div id="top-trend-override-pill" class="trend-override-banner{" visible" if latest and latest.get("dashboard_trend_override") else ""}">{escape_value(latest.get("dashboard_trend_override_label") or "TREND OVERRIDE ACTIVE") if latest else "TREND OVERRIDE ACTIVE"}</div>
       <div id="top-stale-warning" class="data-stale-warning {feed_state}{warning_class}">{escape_value(feed_status)}</div>
@@ -5663,6 +5685,118 @@ def build_recent_alert_history(alert_rows, result_rows):
     )
 
 
+def count_file_lines(path):
+    count = 0
+    with open(path, "rb") as file:
+        while True:
+            chunk = file.read(1024 * 1024)
+            if not chunk:
+                break
+            count += chunk.count(b"\n")
+    return count
+
+
+def read_last_csv_field(path, field_name, tail_bytes=131072):
+    # Tail-reads instead of parsing the whole file so this stays cheap
+    # even against a many-hundred-MB CSV like spy_direction_predictions.
+    try:
+        with open(path, "rb") as file:
+            header_line = file.readline().decode("utf-8-sig", errors="replace").rstrip("\r\n")
+            file.seek(0, os.SEEK_END)
+            end = file.tell()
+            start = max(len(header_line) + 1, end - tail_bytes)
+            file.seek(start)
+            if start > len(header_line) + 1:
+                file.readline()
+            tail = file.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+    lines = [line for line in tail.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    last_row = next(csv.DictReader([header_line, lines[-1]]), None)
+    return last_row.get(field_name) if last_row else None
+
+
+def describe_data_source(label, path, fresh_seconds, timestamp_field="time", is_json=False):
+    entry = {"label": label, "path": path}
+
+    if not os.path.exists(path):
+        entry.update(last_write="--", row_count="--", latest_timestamp="--", status="MISSING")
+        return entry
+
+    mtime = os.path.getmtime(path)
+    age_seconds = time.time() - mtime
+    entry["last_write"] = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+    entry["status"] = "CONNECTED" if age_seconds <= fresh_seconds else "STALE"
+
+    if is_json:
+        entry["row_count"] = "--"
+        try:
+            with open(path, "r", encoding="utf-8-sig") as file:
+                payload = json.load(file)
+            value = payload.get(timestamp_field) if isinstance(payload, dict) else None
+            entry["latest_timestamp"] = str(value) if value not in (None, "") else "--"
+        except (OSError, json.JSONDecodeError):
+            entry["latest_timestamp"] = "--"
+        return entry
+
+    try:
+        entry["row_count"] = max(count_file_lines(path) - 1, 0)
+    except OSError:
+        entry["row_count"] = "--"
+
+    entry["latest_timestamp"] = read_last_csv_field(path, timestamp_field) or "--"
+    return entry
+
+
+def build_data_source_health_panel():
+    # Continuously-written scan-loop outputs vs. event-driven files (an
+    # alert/paper-trade only writes when its own condition fires) use
+    # different staleness windows so a quiet market doesn't get
+    # mislabeled as broken wiring.
+    continuous_seconds = 5 * 60
+    event_driven_seconds = 24 * 60 * 60
+
+    sources = [
+        describe_data_source("Live Status", LIVE_STATUS_FILE, continuous_seconds, "last_update", is_json=True),
+        describe_data_source("Predictions", PREDICTION_FILE, continuous_seconds, "time"),
+        describe_data_source("Alerts", ALERT_FILE, event_driven_seconds, "time"),
+        describe_data_source("Alert Results", RESULT_FILE, event_driven_seconds, "time"),
+        describe_data_source("A+ Results", A_PLUS_RESULT_FILE, event_driven_seconds, "time"),
+        describe_data_source("Engine Health", ENGINE_HEALTH_FILE, continuous_seconds, "time"),
+        describe_data_source("Market Breadth", MARKET_BREADTH_FILE, continuous_seconds, "time"),
+        describe_data_source("Paper Benchmark State", AI_BENCHMARK_STATE_FILE, event_driven_seconds, "last_event", is_json=True),
+        describe_data_source("Paper Benchmark Trades", AI_BENCHMARK_TRADES_FILE, event_driven_seconds, "time"),
+    ]
+
+    rows = "".join(
+        "<tr>"
+        f"<td>{escape_value(source['label'])}</td>"
+        f"<td class=\"debug-path\">{escape_value(source['path'])}</td>"
+        f"<td>{escape_value(source.get('last_write'), '--')}</td>"
+        f"<td>{escape_value(source.get('row_count'), '--')}</td>"
+        f"<td>{escape_value(source.get('latest_timestamp'), '--')}</td>"
+        f"<td><strong class=\"health-status {source['status'].lower()}\">{source['status']}</strong></td>"
+        "</tr>"
+        for source in sources
+    )
+
+    return f"""
+    <section class="data-source-health">
+      <p class="note">Where each panel's data actually comes from right now &mdash; useful for spotting a
+      missing file, a stale writer, or the wrong path without digging through logs.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Panel Source</th><th>File Path</th><th>Last Write</th><th>Rows</th>
+        <th>Latest Row Time</th><th>Status</th></tr></thead>
+        <tbody>{rows}</tbody>
+      </table></div>
+    </section>
+    """
+
+
 def build_collapsible(title, content, open_by_default=False):
     section_ids = {
         "SPY Chart": "chart",
@@ -6542,6 +6676,10 @@ def build_dashboard_content():
         "Paper Benchmark",
         ai_paper_benchmark
     )
+    data_source_health_details = build_collapsible(
+        "Data Source Health",
+        build_data_source_health_panel()
+    )
 
     return f"""
     {sticky_signal_summary}
@@ -6551,6 +6689,7 @@ def build_dashboard_content():
       {paper_benchmark_details}
       {recent_signal_history_details}
       {recent_alert_history_details}
+      {data_source_health_details}
       {logs_details}
     </div>
     """
@@ -9391,6 +9530,28 @@ def build_page():
     .what-next .next-bullish {{ color: #137a4b !important; }}
     .what-next .next-bearish {{ color: #b83a3a !important; }}
     .what-next .next-chop {{ color: #a06f00 !important; }}
+
+    /* Data Source Health debug panel (task: per-panel wiring status). */
+    .debug-path {{ font-family: Consolas, monospace; font-size: 11px; word-break: break-all; }}
+    .health-status.connected {{ color: var(--green) !important; }}
+    .health-status.stale {{ color: var(--amber) !important; }}
+    .health-status.missing {{ color: var(--red) !important; }}
+
+    /* Password login (Task 3). */
+    .header-actions {{ display: flex; align-items: center; gap: 8px; }}
+    .logout-form {{ margin: 0; }}
+    .logout-button {{
+      padding: 9px 14px !important;
+      border: 1px solid var(--border) !important;
+      border-radius: 11px !important;
+      background: transparent !important;
+      color: var(--muted) !important;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: none !important;
+    }}
+    .logout-button:hover {{ color: var(--text) !important; background: var(--panel-soft) !important; }}
 </style>
 </head>
 <body>
@@ -9402,10 +9563,15 @@ def build_page():
         <a href="#section-scanner-details">Scanner</a>
         <a href="#section-recent-signal-history">History</a>
       </nav>
-      <button class="refresh-button" id="refresh-button" type="button"
-              onclick="refreshDashboard()">
-        Refresh
-      </button>
+      <div class="header-actions">
+        <button class="refresh-button" id="refresh-button" type="button"
+                onclick="refreshDashboard()">
+          Refresh
+        </button>
+        <form method="post" action="/logout" class="logout-form">
+          <button type="submit" class="logout-button">Log out</button>
+        </form>
+      </div>
     </header>
     <div id="dashboard-content">{dashboard_content}</div>
     <footer class="dashboard-footer">
@@ -9962,9 +10128,24 @@ def build_page():
       restoreCollapsibleStates();
     }}
 
+    function showLoginRequired() {{
+      const staleWarning = document.getElementById("top-stale-warning");
+      if (staleWarning) {{
+        staleWarning.textContent = "LOGIN REQUIRED";
+        staleWarning.classList.remove("live", "delayed");
+        staleWarning.classList.add("disconnected");
+        staleWarning.classList.add("visible");
+      }}
+      window.location.href = "/login";
+    }}
+
     async function refreshLiveLevelStatus() {{
       try {{
         const response = await fetch("/api/status", {{ cache: "no-store" }});
+        if (response.status === 401) {{
+          showLoginRequired();
+          return;
+        }}
         if (response.ok) {{
           const status = await response.json();
           if (!status.available && !status.feed_connected) {{
@@ -10001,6 +10182,11 @@ def build_page():
       try {{
         const response = await fetch("/dashboard-content", {{ cache: "no-store" }});
 
+        if (response.status === 401) {{
+          showLoginRequired();
+          return;
+        }}
+
         if (!response.ok) {{
           throw new Error("Dashboard refresh failed");
         }}
@@ -10024,8 +10210,121 @@ def build_page():
     refreshLiveLevelStatus();
     window.setInterval(updateTimeDiscipline, 1000);
     window.setInterval(refreshLiveLevelStatus, 1000);
-    window.setInterval(refreshDashboard, 5000);
+    window.setInterval(refreshDashboard, 3000);
   </script>
+</body>
+</html>"""
+
+
+def is_spy_dashboard_authenticated(handler):
+    cookie_header = handler.headers.get("Cookie", "")
+    cookie = SimpleCookie()
+    try:
+        cookie.load(cookie_header)
+    except Exception:
+        return False
+    session_cookie = cookie.get(SESSION_COOKIE_NAME)
+    return bool(session_cookie and session_cookie.value == SESSION_TOKEN)
+
+
+def build_spy_login_page(error_message=""):
+    error_html = (
+        f'<div class="login-error">{escape_value(error_message)}</div>'
+        if error_message
+        else ""
+    )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SPY Dashboard Login</title>
+  <style>
+    :root {{
+      --bg: #07101d;
+      --card: #101b2b;
+      --border: rgba(151, 172, 198, 0.18);
+      --text: #edf4fb;
+      --muted: #91a3b8;
+      --green: #38d996;
+      --danger: #ff6b7a;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at 20% 20%, rgba(56, 217, 150, 0.10), transparent 30%),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 24px;
+    }}
+    .login-card {{
+      width: min(420px, 100%);
+      padding: 32px;
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      background: rgba(16, 27, 43, 0.94);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
+    }}
+    .eyebrow {{
+      margin: 0 0 10px;
+      color: var(--green);
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }}
+    h1 {{ margin: 0 0 10px; font-size: clamp(1.6rem, 6vw, 2.1rem); line-height: 1.05; }}
+    p {{ margin: 0 0 22px; color: var(--muted); line-height: 1.55; }}
+    label {{ display: block; margin-bottom: 8px; color: var(--muted); font-size: 0.85rem; font-weight: 700; }}
+    input {{
+      width: 100%;
+      padding: 13px 14px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #0c1826;
+      color: var(--text);
+      font-size: 1rem;
+      outline: none;
+    }}
+    input:focus {{ border-color: var(--green); box-shadow: 0 0 0 4px rgba(56, 217, 150, 0.16); }}
+    button {{
+      width: 100%;
+      margin-top: 16px;
+      padding: 13px 16px;
+      border: 0;
+      border-radius: 12px;
+      background: var(--green);
+      color: #06251b;
+      font-weight: 900;
+      cursor: pointer;
+    }}
+    .login-error {{
+      margin-bottom: 16px;
+      padding: 11px 13px;
+      border: 1px solid rgba(255, 107, 122, 0.4);
+      border-radius: 12px;
+      background: rgba(255, 107, 122, 0.12);
+      color: var(--danger);
+      font-weight: 800;
+      font-size: 0.9rem;
+    }}
+  </style>
+</head>
+<body>
+  <form class="login-card" method="post" action="/login">
+    <div class="eyebrow">SPY Signal Lab</div>
+    <h1>Dashboard Login</h1>
+    <p>Enter the dashboard password to view live SPY signals and paper benchmark data.</p>
+    {error_html}
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+    <button type="submit">Open Dashboard</button>
+  </form>
 </body>
 </html>"""
 
@@ -10082,8 +10381,35 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.write_response(page)
             return
 
+        if path == "/login":
+            page = build_spy_login_page().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(page)))
+            self.end_headers()
+            self.write_response(page)
+            return
+
         if not self.is_authorized():
             self.request_authentication()
+            return
+
+        browser_api_paths = {"/api/status", "/dashboard-content"}
+        if not is_spy_dashboard_authenticated(self):
+            if path in browser_api_paths:
+                page = json.dumps({"status": "auth_required"}).encode("utf-8")
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(page)))
+                self.end_headers()
+                self.write_response(page)
+                return
+            self.send_response(303)
+            self.send_header("Location", "/login")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
             return
 
         if path == "/api/status":
@@ -10104,6 +10430,47 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.write_response(page)
     def do_POST(self):
         parsed = urlsplit(self.path)
+
+        if parsed.path == "/login":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw_body = self.rfile.read(content_length)
+                form = parse_qs(raw_body.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                form = {}
+
+            password = form.get("password", [""])[0]
+
+            if not secrets.compare_digest(password, SPY_DASHBOARD_PASSWORD):
+                page = build_spy_login_page("Invalid password.").encode("utf-8")
+                self.send_response(401)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(page)))
+                self.end_headers()
+                self.write_response(page)
+                return
+
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.send_header(
+                "Set-Cookie",
+                f"{SESSION_COOKIE_NAME}={SESSION_TOKEN}; HttpOnly; SameSite=Lax; Path=/"
+            )
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+
+        if parsed.path == "/logout":
+            self.send_response(303)
+            self.send_header("Location", "/login")
+            self.send_header(
+                "Set-Cookie",
+                f"{SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
+            )
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
 
         if parsed.path != "/api/push-status":
             self.send_response(404)
@@ -10145,33 +10512,78 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 os.replace(temp_file, LIVE_STATUS_FILE)
 
             if "PREDICTION_FILE" in globals():
-                prediction_row = payload.get("latest_prediction")
+                # Trend Box, Market Box, the SPY Chart, and regime
+                # detection (which feeds Structure/Level Detail) all
+                # read multiple rows from PREDICTION_FILE, not just the
+                # latest one - see build_trend_box, build_market_structure_box,
+                # build_live_chart, detect_regime. Reconstruct as many
+                # real rows as the payload actually carries so those
+                # unchanged functions have the same kind of history
+                # locally they'd have.
+                previous_session_rows = payload.get("latest_prediction_previous_session") or []
+                history_rows = payload.get("latest_prediction_history") or []
 
-                if not isinstance(prediction_row, dict) or not prediction_row:
-                    prediction_row = {
-                        key: value
-                        for key, value in payload.items()
-                        if not isinstance(value, (dict, list))
-                    }
+                prediction_rows = []
+                seen_times = set()
+                for row in previous_session_rows + history_rows:
+                    if not isinstance(row, dict) or not row:
+                        continue
+                    row_time = row.get("time")
+                    if row_time in seen_times:
+                        continue
+                    seen_times.add(row_time)
+                    prediction_rows.append(row)
+                prediction_rows.sort(key=lambda row: row.get("time") or "")
 
-                target_folder = os.path.dirname(PREDICTION_FILE)
+                if not prediction_rows:
+                    # Older pusher, or a push with no history arrays -
+                    # fall back to the single latest row rather than
+                    # writing nothing.
+                    single_row = payload.get("latest_prediction")
+                    if not isinstance(single_row, dict) or not single_row:
+                        single_row = {
+                            key: value
+                            for key, value in payload.items()
+                            if not isinstance(value, (dict, list))
+                        }
+                    if single_row:
+                        prediction_rows = [single_row]
 
-                if target_folder:
-                    os.makedirs(target_folder, exist_ok=True)
+                if prediction_rows:
+                    fieldnames = []
+                    seen_fields = set()
+                    for row in prediction_rows:
+                        for key in row.keys():
+                            if key not in seen_fields:
+                                seen_fields.add(key)
+                                fieldnames.append(key)
 
-                temp_file = PREDICTION_FILE + ".tmp"
+                    target_folder = os.path.dirname(PREDICTION_FILE)
 
-                with open(temp_file, "w", encoding="utf-8", newline="") as file:
-                    writer = csv.DictWriter(file, fieldnames=list(prediction_row.keys()))
-                    writer.writeheader()
-                    writer.writerow(prediction_row)
+                    if target_folder:
+                        os.makedirs(target_folder, exist_ok=True)
 
-                os.replace(temp_file, PREDICTION_FILE)
+                    temp_file = PREDICTION_FILE + ".tmp"
+
+                    with open(temp_file, "w", encoding="utf-8", newline="") as file:
+                        writer = csv.DictWriter(file, fieldnames=fieldnames, restval="")
+                        writer.writeheader()
+                        writer.writerows(prediction_rows)
+
+                    os.replace(temp_file, PREDICTION_FILE)
+                    print(
+                        f"Dashboard push: wrote {len(prediction_rows)} prediction row(s) "
+                        f"to {PREDICTION_FILE} "
+                        f"(previous_session={len(previous_session_rows)}, "
+                        f"history={len(history_rows)})",
+                        flush=True
+                    )
             print(
                 "Dashboard push received:",
                 payload.get("current_spy_price"),
                 payload.get("last_update")
             )
+            print(f"Dashboard push payload keys: {sorted(payload.keys())}", flush=True)
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
