@@ -1,10 +1,12 @@
 import csv
 import json
 import os
+import ssl
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import certifi
 import requests
 
 
@@ -23,6 +25,8 @@ ALERT_RESULTS_FILE = os.path.join(LOG_DIR, "spy_options_alert_results.csv")
 ACCURACY_FILE = os.path.join(LOG_DIR, "spy_options_a_plus_results.csv")
 PAPER_TRADES_FILE = os.path.join(LOG_DIR, "ai_paper_benchmark_trades.csv")
 LEVEL_HITS_FILE = os.path.join(LOG_DIR, "spy_level_hits.json")
+# Generated at startup, not committed (logs/ is gitignored).
+CA_BUNDLE_FILE = os.path.join(LOG_DIR, "ca_bundle.pem")
 
 DEFAULT_UPDATE_URL = "https://YOUR-SPY-RENDER-URL.onrender.com/api/push-status"
 
@@ -32,9 +36,20 @@ STALE_AFTER_SECONDS = 180
 # row (Trend Box, Market Box, SPY Chart, regime detection feeding
 # Structure/Level Detail) look back well past the old 50-row window -
 # see calculate_daily_midpoint_source/build_trend_box/build_live_chart/
-# detect_regime in spy_dashboard.py. This does not change any of that
-# logic, only how much of the same data reaches Render.
-PREDICTION_HISTORY_LIMIT = 1500
+# detect_regime in spy_dashboard.py. detect_regime only needs 45 rows
+# and build_trend_box only needs 120, so 300 (comfortable margin over
+# both, ~10 minutes at the scanner's 2s poll interval) was chosen after
+# an earlier, larger value (1500, full-detail rows) combined with a
+# full previous session produced a ~31MB payload that failed to POST
+# reliably (SSLWantWriteError) - see PREVIOUS_SESSION_FIELDS below for
+# the other half of that fix.
+PREDICTION_HISTORY_LIMIT = 300
+# calculate_daily_midpoint_source (the only consumer of the previous-
+# session rows) only reads these two fields per row. The previous
+# session is a full regular session (~11,000+ rows at a 2s poll
+# interval), so trimming each row to just what's actually read is what
+# keeps that part of the payload from being the dominant cost.
+PREVIOUS_SESSION_FIELDS = ("time", "spy_price")
 # Matches the regular-session window calculate_daily_midpoint_source
 # uses locally (9:30 AM-4:00 PM ET) so "yesterday" means the same thing
 # on Render that it means on the local dashboard.
@@ -47,6 +62,53 @@ REGULAR_SESSION_END = datetime.min.time().replace(hour=16, minute=0)
 # PUSH_EVERY_SECONDS cycle.
 _previous_session_cache_date = None
 _previous_session_cache_rows = []
+_ca_bundle_path = None
+
+
+def build_local_ca_bundle():
+    # On this machine, a local HTTPS-scanning tool (observed with Avast's
+    # Web Shield) re-signs outbound TLS connections with a machine-local
+    # root CA that Windows trusts but that is not (and should not be) in
+    # the public certifi bundle. Without it, verifying an onrender.com
+    # connection fails with CERTIFICATE_VERIFY_FAILED even though the
+    # connection itself is fine. Appending Windows's own Trusted Root
+    # store to certifi's bundle covers both cases without disabling
+    # verification. Falls back to certifi's own bundle if anything about
+    # this fails or on a non-Windows machine.
+    if os.name != "nt":
+        return certifi.where()
+
+    try:
+        with open(certifi.where(), "r", encoding="utf-8") as file:
+            bundle_content = file.read()
+
+        for cert_der, encoding, _trust in ssl.enum_certificates("ROOT"):
+            if encoding == "x509_asn":
+                bundle_content += "\n" + ssl.DER_cert_to_PEM_cert(cert_der)
+
+        os.makedirs(os.path.dirname(CA_BUNDLE_FILE), exist_ok=True)
+        with open(CA_BUNDLE_FILE, "w", encoding="utf-8") as file:
+            file.write(bundle_content)
+
+        return CA_BUNDLE_FILE
+    except (OSError, ssl.SSLError, AttributeError) as error:
+        print(
+            f"Could not build local CA bundle, falling back to certifi: {error}",
+            flush=True,
+        )
+        return certifi.where()
+
+
+def get_ca_bundle():
+    # Built once per process (root CAs do not change mid-run), not
+    # rebuilt every PUSH_EVERY_SECONDS cycle.
+    global _ca_bundle_path
+
+    if _ca_bundle_path is None:
+        _ca_bundle_path = build_local_ca_bundle()
+        print(f"CA bundle for SSL verification: {_ca_bundle_path}", flush=True)
+
+    return _ca_bundle_path
 
 
 def read_previous_session_rows(path):
@@ -213,7 +275,10 @@ def build_payload():
     breadth_rows = read_recent_csv_rows(MARKET_BREADTH_FILE, 25)
     engine_rows = read_recent_csv_rows(ENGINE_HEALTH_FILE, 25)
     prediction_history = read_recent_csv_rows(PREDICTION_FILE, PREDICTION_HISTORY_LIMIT)
-    previous_session_rows = read_previous_session_rows(PREDICTION_FILE)
+    previous_session_rows = [
+        {field: row.get(field) for field in PREVIOUS_SESSION_FIELDS}
+        for row in read_previous_session_rows(PREDICTION_FILE)
+    ]
     alert_history = read_recent_csv_rows(ALERTS_FILE, 50)
     alert_result_history = read_recent_csv_rows(ALERT_RESULTS_FILE, 50)
     accuracy_history = read_recent_csv_rows(ACCURACY_FILE, 50)
@@ -394,6 +459,7 @@ def push_status(payload):
             headers=headers,
             json=payload,
             timeout=15,
+            verify=get_ca_bundle(),
         )
     except requests.RequestException as error:
         print(f"Push failed (no response from Render): {error}", flush=True)
