@@ -3446,6 +3446,8 @@ def build_compact_sticky_signal_summary(latest, regime_data, live_status, decisi
             <span id="top-analysis-age">{escape_value(update_age_text)}</span>
             <span class="visually-hidden">v<b id="top-dashboard-version">{escape_value(DASHBOARD_VERSION)}</b> / <b id="top-build-source">{escape_value(DASHBOARD_BUILD_SOURCE)}</b></span>
           </div>
+          <span class="market-hours-pill">Market scan window: 9:30 AM – 3:30 PM ET</span>
+          <div class="market-hours-note">Outside this window, signals are informational only and should not be treated as active intraday alerts.</div>
           <h1>SPY Signal Dashboard</h1>
           <p id="live-signal-reason" class="visually-hidden">{escape_value(short_reason)}</p>
         </div>
@@ -9197,6 +9199,27 @@ def build_page():
     .signal-hero-kicker strong {{ color: var(--text); }}
     .feed-dot {{ width: 9px; height: 9px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 5px rgba(255, 107, 122, .10); }}
     .feed-dot.live {{ background: var(--green); box-shadow: 0 0 0 5px rgba(56, 217, 150, .10); }}
+    .market-hours-pill {{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 12px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.88);
+      border: 1px solid rgba(96, 165, 250, 0.32);
+      color: #dbeafe;
+      font-weight: 800;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+    }}
+    .market-hours-note {{
+      margin-top: 8px;
+      max-width: 520px;
+      color: #94a3b8;
+      font-size: 0.92rem;
+      line-height: 1.4;
+    }}
     .signal-hero h1 {{ margin: 12px 0 0; color: var(--text) !important; font-size: clamp(30px, 4.5vw, 52px) !important; line-height: 1.02 !important; font-weight: 860 !important; }}
     .signal-hero-copy > p {{ max-width: 760px; margin: 0; color: #c6d3e1 !important; font-size: 16px; line-height: 1.65; }}
     .signal-hero-meta {{ display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 20px; color: var(--muted); font-size: 11px; }}
@@ -9452,9 +9475,7 @@ def build_page():
     .intraday-midpoints,
     .intraday-midpoint-values > div,
     .daily-midpoint,
-    .daily-recap-grid > div,
-    .midpoint-grid > div,
-    .replay-summary-grid {{
+    .midpoint-grid > div {{
       color: #17202a !important;
     }}
     .top-confluence-final b,
@@ -9472,9 +9493,7 @@ def build_page():
     .correction-monitor strong,
     .a-plus-filter strong,
     .intraday-midpoint-values > div strong,
-    .daily-recap-grid > div strong,
-    .midpoint-grid > div strong,
-    .replay-summary-grid strong {{
+    .midpoint-grid > div strong {{
       color: #17202a !important;
     }}
     .confluence-summary p,
@@ -9530,6 +9549,38 @@ def build_page():
     .what-next .next-bullish {{ color: #137a4b !important; }}
     .what-next .next-bearish {{ color: #b83a3a !important; }}
     .what-next .next-chop {{ color: #a06f00 !important; }}
+
+    /* =========================================================
+       MARKET REPLAY DARK CARD FIX
+       .replay-grade-grid (Trade Grade: Trend quality / Volatility /
+       Cleanliness / Tradeability) was missing from the readability
+       fix above entirely, so it kept its light background with
+       near-white inherited text. .replay-summary-grid and
+       .daily-recap-grid boxes (Open/High/Low/Close, Trend direction,
+       Best setup, etc.) were readable but used a light-card / dark-text
+       look that no longer matches the dark dashboard style. This
+       repaints all three as dark cards consistent with the rest of
+       the dashboard.
+       ========================================================= */
+    .replay-summary-grid > div,
+    .replay-grade-grid > div,
+    .daily-recap-grid > div {{
+      background: rgba(15, 23, 42, 0.92) !important;
+      border: 1px solid rgba(148, 163, 184, 0.22) !important;
+      border-left: none !important;
+      box-shadow: inset 3px 0 0 rgba(96, 165, 250, 0.9) !important;
+      border-radius: 14px !important;
+      color: #e5edf7 !important;
+    }}
+    .replay-summary-grid > div span,
+    .daily-recap-grid > div span {{
+      color: #9fb3c8 !important;
+    }}
+    .replay-summary-grid > div strong,
+    .replay-grade-grid > div strong,
+    .daily-recap-grid > div strong {{
+      color: #f8fafc !important;
+    }}
 
     /* Data Source Health debug panel (task: per-panel wiring status). */
     .debug-path {{ font-family: Consolas, monospace; font-size: 11px; word-break: break-all; }}
@@ -10313,7 +10364,66 @@ def build_spy_login_page(error_message=""):
       font-weight: 800;
       font-size: 0.9rem;
     }}
-  </style>
+  
+/* FINAL MARKET REPLAY READABILITY PATCH */
+.market-replay *,
+.replay-grade-grid *,
+.daily-recap *,
+.daily-recap *,
+.daily-recap-grid *,
+.daily-recap-grid div,
+.daily-recap-grid span,
+.daily-recap-grid strong,
+.daily-recap-grid small,
+.replay-grade-grid div,
+.replay-grade-grid span,
+.replay-grade-grid strong,
+.lesson-grid *,
+.educational-lessons *,
+.education-box *,
+.stop-education *,
+.benchmark-card *,
+.benchmark-card * {{
+    color: #eaf2ff !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+}}
+
+.daily-recap article,
+.daily-recap-grid div,
+.replay-grade-grid div,
+.market-replay article,
+.market-replay .card,
+.market-replay .panel {{
+    background: rgba(15, 23, 42, 0.92) !important;
+    color: #eaf2ff !important;
+    border: 1px solid rgba(148, 163, 184, 0.32) !important;
+}}
+
+.daily-recap h3,
+.market-replay h3,
+.market-replay h4,
+.daily-recap-grid strong,
+.replay-grade-grid strong {{
+    color: #ffffff !important;
+    opacity: 1 !important;
+}}
+
+.daily-recap-grid,
+.replay-grade-grid {{
+    gap: 10px !important;
+}}
+
+.empty,
+.muted,
+.hint,
+.caption,
+.description {{
+    color: #cbd5e1 !important;
+    opacity: 1 !important;
+}}
+
+</style>
 </head>
 <body>
   <form class="login-card" method="post" action="/login">
@@ -10624,3 +10734,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
