@@ -65,6 +65,7 @@ A_PLUS_RESULT_FILE = app_path("logs", "spy", "spy_options_a_plus_results.csv")
 ENGINE_HEALTH_FILE = app_path("logs", "spy", "spy_engine_health.csv")
 MARKET_BREADTH_FILE = app_path("logs", "spy", "spy_market_breadth.csv")
 LIVE_STATUS_FILE = app_path("logs", "spy", "spy_live_status.json")
+PERFORMANCE_SUMMARY_FILE = app_path("logs", "spy", "spy_performance_summary.json")
 LEVEL_HITS_FILE = app_path("logs", "spy", "spy_level_hits.json")
 HISTORY_DIR = app_path("logs", "spy", "history")
 AI_BENCHMARK_STATE_FILE = app_path("logs", "spy", "ai_paper_benchmark_state.json")
@@ -389,6 +390,25 @@ def read_live_status():
         "latest_alert_result_history_count": status.get("latest_alert_result_history_count", 0),
         "latest_paper_trade_history_count": status.get("latest_paper_trade_history_count", 0)
     }
+
+
+def read_spy_performance_summary():
+    """Reads spy_performance_summary.json, written by
+    spy_options_alert_scanner.py. Missing/unreadable file returns an empty,
+    honestly-"unavailable" dict rather than raising or faking numbers."""
+    if not os.path.exists(PERFORMANCE_SUMMARY_FILE):
+        return {"available": False}
+
+    try:
+        with open(PERFORMANCE_SUMMARY_FILE, "r", encoding="utf-8") as file:
+            summary = json.load(file)
+        if not isinstance(summary, dict):
+            return {"available": False}
+    except (OSError, ValueError):
+        return {"available": False}
+
+    summary["available"] = True
+    return summary
 
 
 def read_alerts():
@@ -6419,6 +6439,74 @@ def get_live_level_status():
     return response
 
 
+def build_spy_performance_card(performance_summary):
+    """Simple, always-visible summary card for CALL/PUT SPY-price confirmation
+    tracking (see spy_options_alert_scanner.py). Labeled SPY price confirmed,
+    not option price confirmed, since the scanner does not log actual option
+    contract bid/ask/mid prices - only underlying SPY price movement."""
+    if not performance_summary or not performance_summary.get("available"):
+        return """
+        <section class="spy-performance-card">
+          <div class="spy-performance-head">
+            <h2>SPY Signal Performance</h2>
+            <span class="spy-performance-badge pending">AWAITING DATA</span>
+          </div>
+          <p class="spy-performance-note">Waiting for the scanner to write spy_performance_summary.json.</p>
+        </section>
+        """
+
+    last_results = performance_summary.get("last_results") or []
+    last_result = last_results[-1] if last_results else None
+    if last_result:
+        last_result_text = (
+            f"{escape_value(last_result.get('direction'), '--')} "
+            f"{escape_value(last_result.get('result'), '--')} "
+            f"({escape_value(last_result.get('directional_move'), '--')})"
+        )
+    else:
+        last_result_text = "--"
+
+    return f"""
+    <section class="spy-performance-card">
+      <div class="spy-performance-head">
+        <h2>SPY Signal Performance</h2>
+        <span class="spy-performance-badge live">SPY PRICE CONFIRMED (not option price)</span>
+      </div>
+      <div class="spy-performance-grid">
+        <div class="spy-performance-metric">
+          <span>Scanner Testing Hours</span>
+          <strong>{escape_value(performance_summary.get("runtime_hours"), "--")}</strong>
+        </div>
+        <div class="spy-performance-metric">
+          <span>Today Testing Hours</span>
+          <strong>{escape_value(performance_summary.get("today_runtime_hours"), "--")}</strong>
+        </div>
+        <div class="spy-performance-metric">
+          <span>CALL Signals</span>
+          <strong>{escape_value(performance_summary.get("call_signals"), "--")}</strong>
+        </div>
+        <div class="spy-performance-metric">
+          <span>PUT Signals</span>
+          <strong>{escape_value(performance_summary.get("put_signals"), "--")}</strong>
+        </div>
+        <div class="spy-performance-metric">
+          <span>SPY Price Confirmed</span>
+          <strong>{escape_value(performance_summary.get("price_confirmed"), "--")}</strong>
+        </div>
+        <div class="spy-performance-metric">
+          <span>Confirmation Rate</span>
+          <strong>{escape_value(performance_summary.get("confirmation_rate"), "--")}%</strong>
+        </div>
+        <div class="spy-performance-metric wide">
+          <span>Last Signal Result</span>
+          <strong>{last_result_text}</strong>
+        </div>
+      </div>
+      <p class="spy-performance-note">Paper-tested research only. SPY price movement, not actual option contract price. Not a guarantee of future results.</p>
+    </section>
+    """
+
+
 def build_dashboard_content():
     global last_daily_midpoint_analysis
 
@@ -6545,6 +6633,8 @@ def build_dashboard_content():
         live_status,
         trade_decision
     )
+    spy_performance_summary = read_spy_performance_summary()
+    spy_performance_card = build_spy_performance_card(spy_performance_summary)
     top_confluence_checklist = build_top_confluence_checklist(
         latest,
         trade_decision,
@@ -6685,6 +6775,7 @@ def build_dashboard_content():
 
     return f"""
     {sticky_signal_summary}
+    {spy_performance_card}
     <div class="dashboard-tertiary-stack">
       {scanner_details}
       {engine_details}
@@ -9243,6 +9334,19 @@ def build_page():
     .dashboard-secondary-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: 22px; }}
     .dashboard-lower {{ margin-top: 22px; }}
     .dashboard-advanced-stack {{ display: grid; gap: 18px; margin-top: 18px; }}
+    .spy-performance-card {{ margin-top: 16px; padding: 20px 22px; border-radius: 14px; background: var(--panel); border: 1px solid var(--border); }}
+    .spy-performance-head {{ display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }}
+    .spy-performance-head h2 {{ margin: 0; font-size: 16px; letter-spacing: .02em; }}
+    .spy-performance-badge {{ padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; background: rgba(94, 234, 168, .14); color: var(--green); }}
+    .spy-performance-badge.pending {{ background: rgba(151, 172, 198, .14); color: var(--muted); }}
+    .spy-performance-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }}
+    .spy-performance-metric {{ display: flex; flex-direction: column; gap: 4px; }}
+    .spy-performance-metric.wide {{ grid-column: span 2; }}
+    .spy-performance-metric span {{ color: var(--muted); font-size: 11px; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }}
+    .spy-performance-metric strong {{ font-size: 19px; letter-spacing: -.02em; }}
+    .spy-performance-note {{ margin: 14px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }}
+    @media (max-width: 720px) {{ .spy-performance-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} .spy-performance-metric.wide {{ grid-column: span 2; }} }}
+
     .dashboard-tertiary-stack {{ display: grid; gap: 12px; margin-top: 24px; }}
     .dashboard-tertiary-stack > .detail-section {{ margin-top: 0 !important; }}
     .dashboard-tertiary-stack .detail-content > .ai-paper-benchmark,

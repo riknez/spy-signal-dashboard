@@ -25,6 +25,7 @@ ALERT_RESULTS_FILE = os.path.join(LOG_DIR, "spy_options_alert_results.csv")
 ACCURACY_FILE = os.path.join(LOG_DIR, "spy_options_a_plus_results.csv")
 PAPER_TRADES_FILE = os.path.join(LOG_DIR, "ai_paper_benchmark_trades.csv")
 LEVEL_HITS_FILE = os.path.join(LOG_DIR, "spy_level_hits.json")
+PERFORMANCE_SUMMARY_FILE = os.path.join(LOG_DIR, "spy_performance_summary.json")
 # Generated at startup, not committed (logs/ is gitignored).
 CA_BUNDLE_FILE = os.path.join(LOG_DIR, "ca_bundle.pem")
 
@@ -414,6 +415,31 @@ def build_payload():
         value = payload.get(local_key)
         if value not in ("", None, "N/A", "NA", "--"):
             payload[render_key] = value
+
+    # SPY CALL/PUT performance tracking (spy_options_alert_scanner.py writes this
+    # file). Nested under its own key so it can't collide with any existing
+    # payload field, and additive only - never removes/renames anything already
+    # being pushed. Labeled spy_price_confirmed (not "option confirmed") because
+    # the scanner does not log actual option contract bid/ask/mid prices.
+    performance_summary = read_json_file(PERFORMANCE_SUMMARY_FILE)
+    if performance_summary:
+        payload["spy_performance"] = {
+            "last_update": performance_summary.get("last_update"),
+            "runtime_hours": performance_summary.get("runtime_hours"),
+            "today_runtime_hours": performance_summary.get("today_runtime_hours"),
+            "total_signals": performance_summary.get("total_signals"),
+            "call_signals": performance_summary.get("call_signals"),
+            "put_signals": performance_summary.get("put_signals"),
+            "total_results": performance_summary.get("total_results"),
+            "spy_price_confirmed": performance_summary.get("price_confirmed"),
+            "flat": performance_summary.get("flat"),
+            "reversed": performance_summary.get("reversed"),
+            "confirmation_rate": performance_summary.get("confirmation_rate"),
+            "call_confirmation_rate": performance_summary.get("call_confirmation_rate"),
+            "put_confirmation_rate": performance_summary.get("put_confirmation_rate"),
+            "last_results": performance_summary.get("last_results", []),
+            "hourly": performance_summary.get("hourly", []),
+        }
 
     print(f"Payload keys ({len(payload)}): {sorted(payload.keys())}", flush=True)
     print(

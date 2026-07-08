@@ -26,17 +26,41 @@ TREND_CONFIRM_SECONDS = 30
 MIN_TREND_CONFIRM_MOVE = 0.02
 OVEREXTENSION_SECONDS = 60
 MAX_OVEREXTENSION_MOVE = 0.90
+# Main scan-loop cadence. Already faster than the 3s target, so this is
+# named/left as-is rather than slowed down to hit "3 seconds". yfinance
+# itself only refreshes its 1m bars roughly once a minute (see
+# get_spy_snapshot), so polling much faster than this does not get newer
+# price data - it mainly reduces the delay before we notice a new bar.
+SPY_POLL_SECONDS = 2
+LAST_KNOWN_SIGNAL = "WAIT"
+LAST_KNOWN_CONFIDENCE = 0
 
-LOG_DIR = "logs/spy"
-LOG_FILE = "logs/spy/spy_options_alerts.csv"
-SCAN_LOG_FILE = "logs/spy/spy_options_scan_log.csv"
-RESULT_LOG_FILE = "logs/spy/spy_options_alert_results.csv"
-A_PLUS_RESULT_LOG_FILE = "logs/spy/spy_options_a_plus_results.csv"
-PREDICTION_LOG_FILE = "logs/spy/spy_direction_predictions.csv"
-ENGINE_HEALTH_LOG_FILE = "logs/spy/spy_engine_health.csv"
-MARKET_BREADTH_LOG_FILE = "logs/spy/spy_market_breadth.csv"
-LIVE_STATUS_FILE = "logs/spy/spy_live_status.json"
-LIVE_STATUS_TEMP_FILE = "logs/spy/spy_live_status.tmp"
+# SPY-price-only CALL/PUT confirmation tracking. Labeled SPY_PRICE_CONFIRMED
+# (not "option price confirmed") because this scanner does not log actual
+# option contract bid/ask/mid prices - only underlying SPY price movement.
+HEARTBEAT_INTERVAL_SECONDS = 60
+MIN_SPY_CONFIRM_MOVE = 0.10
+CONFIRM_CHECK_AFTER_SECONDS = 60
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Absolute (script-relative) so the dashboard/pusher scripts always find the
+# same files regardless of what folder this scanner was launched from.
+LOG_DIR = os.path.join(BASE_DIR, "logs", "spy")
+LOG_FILE = os.path.join(LOG_DIR, "spy_options_alerts.csv")
+SCAN_LOG_FILE = os.path.join(LOG_DIR, "spy_options_scan_log.csv")
+RESULT_LOG_FILE = os.path.join(LOG_DIR, "spy_options_alert_results.csv")
+A_PLUS_RESULT_LOG_FILE = os.path.join(LOG_DIR, "spy_options_a_plus_results.csv")
+PREDICTION_LOG_FILE = os.path.join(LOG_DIR, "spy_direction_predictions.csv")
+ENGINE_HEALTH_LOG_FILE = os.path.join(LOG_DIR, "spy_engine_health.csv")
+MARKET_BREADTH_LOG_FILE = os.path.join(LOG_DIR, "spy_market_breadth.csv")
+LIVE_STATUS_FILE = os.path.join(LOG_DIR, "spy_live_status.json")
+LIVE_STATUS_TEMP_FILE = os.path.join(LOG_DIR, "spy_live_status.tmp")
+RUNTIME_HEARTBEAT_FILE = os.path.join(LOG_DIR, "spy_runtime_heartbeat.csv")
+SIGNAL_EVENTS_FILE = os.path.join(LOG_DIR, "spy_signal_events.csv")
+SIGNAL_RESULTS_FILE = os.path.join(LOG_DIR, "spy_signal_results.csv")
+PERFORMANCE_SUMMARY_FILE = os.path.join(LOG_DIR, "spy_performance_summary.json")
+PERFORMANCE_SUMMARY_TEMP_FILE = os.path.join(LOG_DIR, "spy_performance_summary.tmp")
 MARKET_BREADTH_ETFS = ["SPY", "QQQ", "IWM"]
 ENGINE_TICKERS = [
     "NVDA",
@@ -164,6 +188,41 @@ RESULT_HEADERS = [
     "confirmed_30s",
     "result"
 ]
+ALERT_HEADERS = [
+    "time",
+    "direction",
+    "option_type",
+    "symbol",
+    "spy_price",
+    "spy_change_percent"
+]
+RUNTIME_HEARTBEAT_HEADERS = [
+    "time",
+    "epoch",
+    "spy_price",
+    "current_signal"
+]
+SIGNAL_EVENT_HEADERS = [
+    "signal_id",
+    "time",
+    "epoch",
+    "direction",
+    "entry_spy_price",
+    "confidence",
+    "market_regime",
+    "reason"
+]
+SIGNAL_RESULT_HEADERS = [
+    "signal_id",
+    "time",
+    "epoch",
+    "direction",
+    "entry_spy_price",
+    "confirm_spy_price",
+    "seconds_after_alert",
+    "directional_move",
+    "result"
+]
 
 last_alert_time = 0
 scan_count = 0
@@ -192,6 +251,8 @@ pre_market_low = None
 pre_market_volume_samples = deque(maxlen=15)
 yesterday_midpoint_cache_date = None
 yesterday_midpoint_cache_value = None
+last_heartbeat_time = 0
+pending_spy_confirmations = []
 
 
 def resample_completed_candles(completed_one_minute, minutes, count=20):
@@ -595,13 +656,36 @@ def push_live_status_to_render():
         print("Render dashboard push error:", error)
 
 
-def save_live_status(spy_price, now):
+def save_live_status(spy_price, now, spy_bar_key=None):
     ensure_log_dir()
+
+    # How old the underlying yfinance 1m bar is, independent of how often
+    # we poll it - this is the honest "true" freshness ceiling, since the
+    # fast_info quote (when it's what set spy_price) does not expose an
+    # age of its own to compare against.
+    price_age_seconds = None
+    if spy_bar_key:
+        try:
+            price_age_seconds = round(
+                max(0.0, now - datetime.fromisoformat(str(spy_bar_key)).timestamp()),
+                1
+            )
+        except (ValueError, TypeError):
+            price_age_seconds = None
+
     status = {
         "current_spy_price": round(spy_price, 4),
+        "spy_price": round(spy_price, 4),
         "last_update": time.strftime("%Y-%m-%d %H:%M:%S"),
         "update_epoch": now,
-        "data_source": "yfinance fast_info + SPY 1m"
+        "data_source": "yfinance fast_info + SPY 1m",
+        "scanner_online": True,
+        # Last fully-computed signal/confidence (from the most recent
+        # completed loop iteration - up to SPY_POLL_SECONDS old, not
+        # recomputed here so this never touches signal logic).
+        "signal": LAST_KNOWN_SIGNAL,
+        "confidence": LAST_KNOWN_CONFIDENCE,
+        "price_age_seconds": price_age_seconds
     }
 
     with open(LIVE_STATUS_TEMP_FILE, "w", encoding="utf-8") as file:
@@ -645,27 +729,13 @@ def save_scan_row(spy_price, spy_change_percent):
 def save_alert(direction, option_type, spy_price, spy_change_percent):
     ensure_log_dir()
     current_time = time.strftime("%Y-%m-%d %H:%M:%S")
-
-    file_exists = False
-
-    try:
-        with open(LOG_FILE, "r", newline="") as file:
-            file_exists = True
-    except FileNotFoundError:
-        file_exists = False
+    file_exists = ensure_csv_header(LOG_FILE, ALERT_HEADERS)
 
     with open(LOG_FILE, "a", newline="") as file:
         writer = csv.writer(file)
 
         if not file_exists:
-            writer.writerow([
-                "time",
-                "direction",
-                "option_type",
-                "symbol",
-                "spy_price",
-                "spy_change_percent"
-            ])
+            writer.writerow(ALERT_HEADERS)
 
         writer.writerow([
             current_time,
@@ -2521,6 +2591,46 @@ def normalize_result_log_row(row):
     }
 
 
+def ensure_csv_header(path, expected_headers):
+    # Rewrites path's header row to expected_headers when it has drifted
+    # (e.g. a writer's column layout changed after the file was created,
+    # so old header text no longer matches the data actually being
+    # written). Existing rows are read positionally, not through the
+    # stale header names, and kept as-is when their width already
+    # matches the current schema, since that's the common case here:
+    # the data was fine, only the header label text was stale.
+    if not os.path.exists(path):
+        return False
+
+    with open(path, "r", newline="") as file:
+        raw_reader = csv.reader(file)
+        try:
+            existing_header = next(raw_reader)
+        except StopIteration:
+            return False
+
+        if existing_header == expected_headers:
+            return True
+
+        raw_rows = list(raw_reader)
+
+    width = len(expected_headers)
+
+    with open(path, "w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(expected_headers)
+
+        for raw_row in raw_rows:
+            if len(raw_row) == width:
+                writer.writerow(raw_row)
+            elif len(raw_row) > width:
+                writer.writerow(raw_row[:width])
+            else:
+                writer.writerow(raw_row + [""] * (width - len(raw_row)))
+
+    return True
+
+
 def ensure_result_log_file():
     if not os.path.exists(RESULT_LOG_FILE):
         return False
@@ -2599,7 +2709,8 @@ def save_a_plus_result_row(
     confirmed_30s,
     result
 ):
-    file_exists = os.path.exists(A_PLUS_RESULT_LOG_FILE)
+    ensure_log_dir()
+    file_exists = ensure_csv_header(A_PLUS_RESULT_LOG_FILE, RESULT_HEADERS)
     with open(A_PLUS_RESULT_LOG_FILE, "a", newline="") as file:
         writer = csv.writer(file)
         if not file_exists:
@@ -2716,6 +2827,282 @@ def track_alert_result(option_type, entry_spy_price, a_plus_setup="YES"):
     )
 
 
+# ---------------------------------------------------------------------------
+# SPY runtime + CALL/PUT signal performance tracking (SPY price only).
+#
+# This is separate from track_alert_result() above: that function already
+# blocks the loop with time.sleep() to sample 30/60/120s follow-up prices.
+# The functions below add a second, non-blocking result: a pending list is
+# checked once per main-loop iteration instead of sleeping, and results are
+# labeled SPY_PRICE_CONFIRMED/FLAT/REVERSED rather than "confirmed" -
+# because this scanner does not log actual option contract bid/ask/mid
+# prices, only underlying SPY price movement.
+# ---------------------------------------------------------------------------
+
+def read_csv_rows_safe(path):
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", newline="") as file:
+            return list(csv.DictReader(file))
+    except OSError:
+        return []
+
+
+def append_runtime_heartbeat(spy_price, now, current_signal):
+    """Appends one heartbeat row roughly every HEARTBEAT_INTERVAL_SECONDS so
+    total/today scanner testing hours can be derived later, even across
+    scanner restarts (see calculate_runtime_hours)."""
+    ensure_log_dir()
+    file_exists = ensure_csv_header(RUNTIME_HEARTBEAT_FILE, RUNTIME_HEARTBEAT_HEADERS)
+
+    with open(RUNTIME_HEARTBEAT_FILE, "a", newline="") as file:
+        writer = csv.writer(file)
+        if not file_exists:
+            writer.writerow(RUNTIME_HEARTBEAT_HEADERS)
+        writer.writerow([
+            time.strftime("%Y-%m-%d %H:%M:%S"),
+            f"{now:.3f}",
+            f"{spy_price:.4f}",
+            current_signal
+        ])
+
+    update_spy_performance_summary(now)
+
+
+def calculate_runtime_hours(now):
+    """Total scanner runtime and today's runtime, in hours, derived from the
+    heartbeat CSV's own timestamps - not this process's uptime - so restarts
+    do not reset the total back to zero."""
+    if not os.path.exists(RUNTIME_HEARTBEAT_FILE):
+        return 0.0, 0.0
+
+    first_epoch = None
+    today_first_epoch = None
+    today_key = datetime.now().strftime("%Y-%m-%d")
+
+    for row in read_csv_rows_safe(RUNTIME_HEARTBEAT_FILE):
+        try:
+            epoch = float(row.get("epoch"))
+        except (TypeError, ValueError):
+            continue
+
+        if first_epoch is None:
+            first_epoch = epoch
+
+        row_time = row.get("time") or ""
+        if row_time.startswith(today_key) and today_first_epoch is None:
+            today_first_epoch = epoch
+
+    runtime_hours = round((now - first_epoch) / 3600.0, 2) if first_epoch else 0.0
+    today_runtime_hours = (
+        round((now - today_first_epoch) / 3600.0, 2)
+        if today_first_epoch is not None
+        else 0.0
+    )
+
+    return runtime_hours, today_runtime_hours
+
+
+def log_spy_signal_event(direction, entry_spy_price, confidence, market_regime, reason, now):
+    """Logs a CALL/PUT alert to spy_signal_events.csv and registers a pending,
+    non-blocking confirmation check (resolved later by
+    process_pending_spy_confirmations - no time.sleep here)."""
+    ensure_log_dir()
+    signal_id = f"{int(now)}_{direction}"
+
+    file_exists = ensure_csv_header(SIGNAL_EVENTS_FILE, SIGNAL_EVENT_HEADERS)
+    with open(SIGNAL_EVENTS_FILE, "a", newline="") as file:
+        writer = csv.writer(file)
+        if not file_exists:
+            writer.writerow(SIGNAL_EVENT_HEADERS)
+        writer.writerow([
+            signal_id,
+            time.strftime("%Y-%m-%d %H:%M:%S"),
+            f"{now:.3f}",
+            direction,
+            f"{entry_spy_price:.4f}",
+            confidence,
+            market_regime,
+            reason
+        ])
+
+    pending_spy_confirmations.append({
+        "signal_id": signal_id,
+        "direction": direction,
+        "entry_spy_price": entry_spy_price,
+        "entry_epoch": now,
+        "check_after_seconds": CONFIRM_CHECK_AFTER_SECONDS
+    })
+
+    return signal_id
+
+
+def save_spy_signal_result(
+    signal_id,
+    direction,
+    entry_spy_price,
+    confirm_spy_price,
+    seconds_after_alert,
+    directional_move,
+    result,
+    now
+):
+    ensure_log_dir()
+    file_exists = ensure_csv_header(SIGNAL_RESULTS_FILE, SIGNAL_RESULT_HEADERS)
+
+    with open(SIGNAL_RESULTS_FILE, "a", newline="") as file:
+        writer = csv.writer(file)
+        if not file_exists:
+            writer.writerow(SIGNAL_RESULT_HEADERS)
+        writer.writerow([
+            signal_id,
+            time.strftime("%Y-%m-%d %H:%M:%S"),
+            f"{now:.3f}",
+            direction,
+            f"{entry_spy_price:.4f}",
+            f"{confirm_spy_price:.4f}",
+            f"{seconds_after_alert:.1f}",
+            f"{directional_move:.4f}",
+            result
+        ])
+
+    update_spy_performance_summary(now)
+
+
+def process_pending_spy_confirmations(current_spy_price, now):
+    """Checked once per main-loop iteration (not with time.sleep). Any pending
+    CALL/PUT alert whose check_after_seconds has elapsed is resolved into a
+    SPY_PRICE_CONFIRMED / FLAT / REVERSED result based on SPY price only."""
+    if not pending_spy_confirmations or current_spy_price is None:
+        return
+
+    still_pending = []
+    for pending in pending_spy_confirmations:
+        seconds_elapsed = now - pending["entry_epoch"]
+        if seconds_elapsed < pending["check_after_seconds"]:
+            still_pending.append(pending)
+            continue
+
+        direction = pending["direction"]
+        entry_spy_price = pending["entry_spy_price"]
+
+        if direction == "CALL":
+            directional_move = current_spy_price - entry_spy_price
+        else:
+            directional_move = entry_spy_price - current_spy_price
+
+        if directional_move >= MIN_SPY_CONFIRM_MOVE:
+            result = "PRICE_CONFIRMED"
+        elif directional_move <= -MIN_SPY_CONFIRM_MOVE:
+            result = "REVERSED"
+        else:
+            result = "FLAT"
+
+        save_spy_signal_result(
+            pending["signal_id"],
+            direction,
+            entry_spy_price,
+            current_spy_price,
+            seconds_elapsed,
+            directional_move,
+            result,
+            now
+        )
+
+    pending_spy_confirmations[:] = still_pending
+
+
+def build_hourly_spy_performance(result_rows):
+    buckets = {}
+    order = []
+    for row in result_rows:
+        row_time = row.get("time") or ""
+        hour_key = row_time[:13] if len(row_time) >= 13 else ""
+        if not hour_key:
+            continue
+        if hour_key not in buckets:
+            buckets[hour_key] = {
+                "hour": hour_key,
+                "signals": 0,
+                "price_confirmed": 0,
+                "flat": 0,
+                "reversed": 0
+            }
+            order.append(hour_key)
+
+        bucket = buckets[hour_key]
+        bucket["signals"] += 1
+        result = row.get("result")
+        if result == "PRICE_CONFIRMED":
+            bucket["price_confirmed"] += 1
+        elif result == "FLAT":
+            bucket["flat"] += 1
+        elif result == "REVERSED":
+            bucket["reversed"] += 1
+
+    return [buckets[key] for key in order[-24:]]
+
+
+def update_spy_performance_summary(now):
+    """Rebuilds spy_performance_summary.json from the CSV logs above. Called
+    after every heartbeat and after every result, per spec."""
+    ensure_log_dir()
+
+    event_rows = read_csv_rows_safe(SIGNAL_EVENTS_FILE)
+    result_rows = read_csv_rows_safe(SIGNAL_RESULTS_FILE)
+
+    total_signals = len(event_rows)
+    call_signals = sum(1 for row in event_rows if row.get("direction") == "CALL")
+    put_signals = sum(1 for row in event_rows if row.get("direction") == "PUT")
+
+    total_results = len(result_rows)
+    price_confirmed = sum(1 for row in result_rows if row.get("result") == "PRICE_CONFIRMED")
+    flat_count = sum(1 for row in result_rows if row.get("result") == "FLAT")
+    reversed_count = sum(1 for row in result_rows if row.get("result") == "REVERSED")
+
+    call_results = [row for row in result_rows if row.get("direction") == "CALL"]
+    put_results = [row for row in result_rows if row.get("direction") == "PUT"]
+    call_confirmed = sum(1 for row in call_results if row.get("result") == "PRICE_CONFIRMED")
+    put_confirmed = sum(1 for row in put_results if row.get("result") == "PRICE_CONFIRMED")
+
+    confirmation_rate = (
+        round(price_confirmed / total_results * 100, 2) if total_results else 0.0
+    )
+    call_confirmation_rate = (
+        round(call_confirmed / len(call_results) * 100, 2) if call_results else 0.0
+    )
+    put_confirmation_rate = (
+        round(put_confirmed / len(put_results) * 100, 2) if put_results else 0.0
+    )
+
+    runtime_hours, today_runtime_hours = calculate_runtime_hours(now)
+
+    summary = {
+        "last_update": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "runtime_hours": runtime_hours,
+        "today_runtime_hours": today_runtime_hours,
+        "total_signals": total_signals,
+        "call_signals": call_signals,
+        "put_signals": put_signals,
+        "total_results": total_results,
+        "price_confirmed": price_confirmed,
+        "flat": flat_count,
+        "reversed": reversed_count,
+        "confirmation_rate": confirmation_rate,
+        "call_confirmation_rate": call_confirmation_rate,
+        "put_confirmation_rate": put_confirmation_rate,
+        "last_results": result_rows[-10:],
+        "hourly": build_hourly_spy_performance(result_rows)
+    }
+
+    with open(PERFORMANCE_SUMMARY_TEMP_FILE, "w", encoding="utf-8") as file:
+        json.dump(summary, file, indent=2)
+    os.replace(PERFORMANCE_SUMMARY_TEMP_FILE, PERFORMANCE_SUMMARY_FILE)
+
+    return summary
+
+
 ensure_log_dir()
 
 print("Starting SPY options alert scanner...")
@@ -2747,7 +3134,13 @@ while True:
             time.sleep(5)
             continue
 
-        save_live_status(spy_price, now)
+        save_live_status(spy_price, now, spy_bar_key)
+
+        if now - last_heartbeat_time >= HEARTBEAT_INTERVAL_SECONDS:
+            append_runtime_heartbeat(spy_price, now, LAST_KNOWN_SIGNAL)
+            last_heartbeat_time = now
+
+        process_pending_spy_confirmations(spy_price, now)
 
         last_1m_bid_total, last_1m_bid_average, volume_filter = (
             update_rolling_bid_volume(
@@ -2899,6 +3292,10 @@ while True:
             generate_trade_plan(PRICE_HISTORY, prediction_data["prediction"])
         )
         save_prediction_row(spy_price, prediction_data)
+        # Captured (not recomputed) so save_live_status can surface the
+        # latest signal/confidence without touching prediction logic.
+        LAST_KNOWN_SIGNAL = prediction_data.get("prediction", "WAIT")
+        LAST_KNOWN_CONFIDENCE = prediction_data.get("confidence") or 0
 
         if now - last_diagnostic_print_time >= 60:
             print()
@@ -2987,6 +3384,15 @@ while True:
                     spy_change
                 )
 
+                log_spy_signal_event(
+                    "CALL",
+                    spy_price,
+                    prediction_data.get("confidence"),
+                    prediction_data.get("regime"),
+                    prediction_data.get("reason"),
+                    now
+                )
+
                 alert_allowed_count += 1
                 last_alert_time = time.time()
 
@@ -3054,6 +3460,15 @@ while True:
                     spy_change
                 )
 
+                log_spy_signal_event(
+                    "PUT",
+                    spy_price,
+                    prediction_data.get("confidence"),
+                    prediction_data.get("regime"),
+                    prediction_data.get("reason"),
+                    now
+                )
+
                 alert_allowed_count += 1
                 last_alert_time = time.time()
 
@@ -3061,7 +3476,7 @@ while True:
 
                 last_alert_time = time.time()
 
-        time.sleep(2)
+        time.sleep(SPY_POLL_SECONDS)
 
     except Exception as error:
         print("Error:", error)
