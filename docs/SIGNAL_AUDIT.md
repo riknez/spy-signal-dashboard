@@ -70,10 +70,20 @@ Samples are tiny (11–38 signals) and the price data is coarse. **There is no e
 loosening thresholds creates an edge.** The evidence supports fixing the measurement defects
 first and collecting clean data before touching thresholds.
 
-## Proposed corrections — NOT applied, need approval
+## Corrections — approved and applied 2026-11-11 (thresholds unchanged)
 
 1. Measure volume from the last *completed* 1-minute bar (and a rolling average for RVOL).
 2. Map regime to direction (`TRENDING UP`→CALL, `TRENDING DOWN`→PUT, others neutral).
 3. Skip non-trading days in `get_market_phase` (the supervisor already stops the scanner then).
 4. Compute Yesterday Midpoint from the previous NYSE regular session only, cached.
 Thresholds (55 / 80 / 8-of-11 / midday block) unchanged until ~4 weeks of clean data exist.
+
+Status: items 1–4 implemented on branch `migration/wordpress-pc` (functions
+`update_rolling_bid_volume` + `record_last_completed_1m_bar`, `regime_direction`,
+`get_market_phase`, `get_yesterday_midpoint_direction`). `tests/logic_unchanged.py`
+proves no other function and no threshold constant changed.
+
+Note for a future decision (not changed): with volume now measured correctly, the
+existing 200-share minimum will almost always pass for SPY, so the volume check will
+rarely block. Requiring above-average (RVOL) volume would be a new threshold and needs
+your approval.

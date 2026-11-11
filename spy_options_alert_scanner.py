@@ -15,6 +15,42 @@ SYMBOL = "SPY"
 
 EASTERN_TZ = ZoneInfo("America/New_York")
 
+# Official NYSE calendar (holidays, early closes). Optional: if the package
+# is missing, fall back to "weekdays are trading days, close at 4:00 PM".
+try:
+    import exchange_calendars as _xcals
+    import pandas as _pd
+    _NYSE = _xcals.get_calendar("XNYS")
+except Exception:  # pragma: no cover - fallback path
+    _NYSE = None
+    _pd = None
+
+
+def nyse_session_info(day):
+    """(is_trading_day, open_minutes, close_minutes) for a date, ET minutes."""
+    if _NYSE is not None:
+        ts = _pd.Timestamp(day)
+        if not _NYSE.is_session(ts):
+            return False, None, None
+        o = _NYSE.session_open(ts).tz_convert(EASTERN_TZ)
+        c = _NYSE.session_close(ts).tz_convert(EASTERN_TZ)
+        return True, o.hour * 60 + o.minute, c.hour * 60 + c.minute
+    return day.weekday() < 5, 570, 960
+
+
+def previous_nyse_session(day):
+    """The trading day before `day` (date object)."""
+    if _NYSE is not None:
+        ts = _pd.Timestamp(day)
+        if _NYSE.is_session(ts):
+            return _NYSE.previous_session(ts).date()
+        return _NYSE.date_to_session(ts, direction="previous").date()
+    from datetime import timedelta
+    d = day - timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
 
 def eastern_strftime(fmt):
     """Log timestamps always in US/Eastern (market time), whatever the PC's
@@ -251,6 +287,9 @@ engine_bias = "MIXED"
 market_breadth_classification = "Neutral"
 last_spy_volume_bar = None
 last_spy_volume_value = 0
+# (bar start time, volume) of the most recent COMPLETED 1-minute bar,
+# refreshed by get_spy_snapshot().
+LAST_COMPLETED_1M_BAR = (None, None)
 current_mode_prediction = "WAIT"
 last_directional_prediction = None
 current_mode_started_at = time.time()
@@ -313,6 +352,7 @@ def get_spy_snapshot():
         pass
     last_volume = data["Volume"].iloc[-1]
     last_bar = str(data.index[-1])
+    record_last_completed_1m_bar(data)
     completed_candles = []
     total_volume = float(data["Volume"].sum())
     typical_price = (data["High"] + data["Low"] + data["Close"]) / 3
@@ -404,6 +444,12 @@ def get_spy_price():
 def get_market_phase():
     eastern_now = datetime.now(ZoneInfo("America/New_York"))
     minutes = eastern_now.hour * 60 + eastern_now.minute
+    # Fix (approved 2026-11-11): weekends/holidays used to be labelled as
+    # open-market phases, and early-close days ran "Power Hour" past the
+    # close. Phase boundaries themselves are unchanged.
+    is_trading_day, _open_minutes, close_minutes = nyse_session_info(eastern_now.date())
+    if not is_trading_day or minutes >= close_minutes:
+        return "Market Closed"
     if 555 <= minutes < 570:
         return "Pre-Market Analysis"
     if 570 <= minutes < 575:
@@ -495,30 +541,40 @@ def opening_confirmation_ready(timeframe_candles):
     )
 
 
+def record_last_completed_1m_bar(data, now_ts=None):
+    """Remember the volume of the newest 1-minute bar that has fully closed.
+
+    The in-progress bar Yahoo returns usually reports 0 (or a partial)
+    volume and the old code only ever saw that bar, so the last-minute
+    volume was 0 in ~83% of market-hours rows. A bar is complete once its
+    start time + 60 s has passed.
+    """
+    global LAST_COMPLETED_1M_BAR
+    try:
+        import pandas as pd
+        now_ts = now_ts or pd.Timestamp.now(tz="UTC")
+        index = data.index
+        if index.tz is None:
+            index = index.tz_localize(EASTERN_TZ)
+        complete = (index + pd.Timedelta(minutes=1)) <= now_ts
+        if complete.any():
+            position = int(complete.nonzero()[0][-1])
+            LAST_COMPLETED_1M_BAR = (
+                str(data.index[position]),
+                float(data["Volume"].iloc[position]),
+            )
+    except Exception as error:
+        print("Could not read completed 1m bar volume:", error)
+
+
 def update_rolling_bid_volume(now, bar_key, current_volume):
-    global last_spy_volume_bar
-    global last_spy_volume_value
-
-    if bar_key is not None and current_volume is not None:
-        if bar_key != last_spy_volume_bar:
-            volume_delta = max(0, current_volume)
-            last_spy_volume_bar = bar_key
-            last_spy_volume_value = current_volume
-        else:
-            volume_delta = max(0, current_volume - last_spy_volume_value)
-            last_spy_volume_value = current_volume
-
-        if volume_delta > 0:
-            BID_VOLUME_HISTORY.append((now, volume_delta))
-
-    while BID_VOLUME_HISTORY and now - BID_VOLUME_HISTORY[0][0] > 60:
-        BID_VOLUME_HISTORY.popleft()
-
-    last_1m_bid_total = sum(volume for _, volume in BID_VOLUME_HISTORY)
-    last_1m_bid_average = (
-        last_1m_bid_total / len(BID_VOLUME_HISTORY)
-        if BID_VOLUME_HISTORY else 0
-    )
+    # Fix (approved 2026-11-11): measure the last minute's volume from the
+    # last COMPLETED 1-minute bar. The pass/fail threshold
+    # (MIN_1M_BID_TOTAL) and the returned fields are unchanged.
+    # bar_key/current_volume are kept for call-site compatibility.
+    _bar_time, completed_volume = LAST_COMPLETED_1M_BAR
+    last_1m_bid_total = float(completed_volume or 0)
+    last_1m_bid_average = last_1m_bid_total
     volume_filter = (
         "PASS" if last_1m_bid_total >= MIN_1M_BID_TOTAL else "FAIL"
     )
@@ -1863,28 +1919,69 @@ def get_a_plus_trade_risk(market_phase, regime, mode_stability):
     return "NORMAL"
 
 
+def read_session_prices_from_end(path, session_date, open_hhmm, close_hhmm, block=1 << 20):
+    """Prices logged during one regular session, reading the CSV backwards
+    from the end and stopping once older dates are reached (the old code
+    read the whole 1+ GB file)."""
+    prices = []
+    with open(path, "rb") as file:
+        file.seek(0, os.SEEK_END)
+        position = file.tell()
+        remainder = b""
+        done = False
+        while position > 0 and not done:
+            step = min(block, position)
+            position -= step
+            file.seek(position)
+            chunk = file.read(step) + remainder
+            lines = chunk.split(b"\n")
+            remainder = lines[0] if position > 0 else b""
+            body = lines[1:] if position > 0 else lines
+            for raw in reversed(body):
+                line = raw.decode("utf-8-sig", "replace").strip("\r")
+                if len(line) < 20 or not line[:4].isdigit():
+                    continue
+                row_date = line[:10]
+                if row_date > session_date:
+                    continue
+                if row_date < session_date:
+                    done = True
+                    break
+                row_hhmm = line[11:16]
+                if not (open_hhmm <= row_hhmm < close_hhmm):
+                    continue
+                try:
+                    fields = next(csv.reader([line]))
+                    prices.append(float(fields[1]))
+                except (StopIteration, IndexError, ValueError):
+                    continue
+    return prices
+
+
 def get_yesterday_midpoint_direction(spy_price):
     global yesterday_midpoint_cache_date, yesterday_midpoint_cache_value
 
-    today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    # Fix (approved 2026-11-11): "yesterday" now means the previous NYSE
+    # trading session's regular hours (9:30 to its close), not every row of
+    # the previous calendar date (which included overnight, weekend and
+    # holiday rows). Midpoint formula and the +/-0.10 band are unchanged.
+    eastern_today = datetime.now(ZoneInfo("America/New_York")).date()
+    today = eastern_today.strftime("%Y-%m-%d")
     if yesterday_midpoint_cache_date != today:
         yesterday_midpoint_cache_date = today
         yesterday_midpoint_cache_value = None
         if os.path.exists(PREDICTION_LOG_FILE):
-            grouped_prices = {}
-            with open(PREDICTION_LOG_FILE, "r", newline="") as file:
-                for row in csv.DictReader(file):
-                    row_time = row.get("time", "")
-                    if len(row_time) < 10 or row_time[:10] >= today:
-                        continue
-                    try:
-                        row_price = float(row.get("spy_price"))
-                    except (TypeError, ValueError):
-                        continue
-                    grouped_prices.setdefault(row_time[:10], []).append(row_price)
-            if grouped_prices:
-                latest_prior_date = sorted(grouped_prices)[-1]
-                prior_prices = grouped_prices[latest_prior_date]
+            previous_session = previous_nyse_session(eastern_today)
+            _is_day, open_minutes, close_minutes = nyse_session_info(previous_session)
+            open_minutes = open_minutes or 570
+            close_minutes = close_minutes or 960
+            prior_prices = read_session_prices_from_end(
+                PREDICTION_LOG_FILE,
+                previous_session.strftime("%Y-%m-%d"),
+                f"{open_minutes // 60:02d}:{open_minutes % 60:02d}",
+                f"{close_minutes // 60:02d}:{close_minutes % 60:02d}",
+            )
+            if prior_prices:
                 yesterday_midpoint_cache_value = (
                     max(prior_prices) + min(prior_prices)
                 ) / 2
@@ -1896,6 +1993,12 @@ def get_yesterday_midpoint_direction(spy_price):
     if spy_price < yesterday_midpoint_cache_value - 0.10:
         return "PUT"
     return "NEUTRAL"
+
+
+def regime_direction(regime):
+    return {"TRENDING UP": "CALL", "TRENDING DOWN": "PUT"}.get(
+        str(regime or "").upper(), "NEUTRAL"
+    )
 
 
 def apply_a_plus_setup_filter(
@@ -1960,7 +2063,10 @@ def apply_a_plus_setup_filter(
         else "NEUTRAL"
     )
     factors = {
-        "Market Regime": direction_from_text(regime),
+        # Fix (approved 2026-11-11): regime values are TRENDING UP /
+        # TRENDING DOWN / CHOPPY / REVERSAL RISK, which the keyword matcher
+        # never recognised, so this factor was NEUTRAL 100% of the time.
+        "Market Regime": regime_direction(regime),
         "VWAP": direction_from_text(prediction_data.get("vwap_position")),
         "Trend Box": trend_box,
         "Market Box": market_box,
