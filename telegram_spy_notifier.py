@@ -70,6 +70,11 @@ def is_market_alert_window():
     return True, now_et, "Market alert window active"
 
 
+def is_spy_alert_hours():
+    in_window, _now_et, _reason = is_market_alert_window()
+    return in_window
+
+
 def read_last_prediction():
     try:
         with open(PREDICTION_FILE, "r", encoding="utf-8-sig", newline="") as file:
@@ -224,11 +229,12 @@ def build_message(row):
 
 
 def send_telegram_message(message):
+    if not is_spy_alert_hours():
+        print("Outside SPY alert hours. Waiting...")
+        return False
+
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = (
-        os.environ.get("SPY_TELEGRAM_CHAT_ID", "").strip()
-        or os.environ.get("TELEGRAM_MEMBER_CHAT_ID", "").strip()
-    )
+    chat_id = os.environ.get("SPY_TELEGRAM_CHAT_ID", "").strip()
 
     if not bot_token:
         print("Missing TELEGRAM_BOT_TOKEN in .env")

@@ -1,4 +1,4 @@
-import csv
+﻿import csv
 import json
 import os
 import ssl
@@ -526,3 +526,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

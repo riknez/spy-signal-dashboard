@@ -35,6 +35,9 @@ start "SPY OPTIONS ALERT SCANNER" powershell -NoExit -ExecutionPolicy Bypass -Co
 
 start "SPY RENDER LIVE FEED PUSHER" powershell -NoExit -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '%~dp0'; py push_spy_status_to_landing.py"
 
+REM SPY Telegram channel/group may not be fully configured yet.
+REM To disable ONLY the Telegram notifier (keep scanner + pusher running),
+REM put REM at the start of the "start" line directly below.
 start "SPY TELEGRAM NOTIFIER" powershell -NoExit -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '%~dp0'; py telegram_spy_notifier.py"
 
 echo.
