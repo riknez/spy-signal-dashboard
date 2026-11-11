@@ -15,11 +15,17 @@ $python = (& py -3 -c "import sys; print(sys.executable)").Trim()
 if (-not (Test-Path $python)) { throw "Python launcher 'py' not found." }
 $pythonw = Join-Path (Split-Path $python) "pythonw.exe"
 if (-not (Test-Path $pythonw)) { $pythonw = $python }
-& $python -c "import exchange_calendars, pandas, yfinance" 2>$null
+# Windows PowerShell 5.1 turns any stderr from a native command into a
+# terminating error under "Stop", so check exit codes with "Continue".
+$ErrorActionPreference = "Continue"
+& $python -c "import exchange_calendars, pandas, yfinance" *> $null
 if ($LASTEXITCODE -ne 0) {
   Write-Host "Installing required packages ..."
-  & $python -m pip install --user -r (Join-Path $Project "worker\requirements-worker.txt")
+  & $python -m pip install --user --disable-pip-version-check -r (Join-Path $Project "worker\requirements-worker.txt") 2>&1 | Out-Host
+  & $python -c "import exchange_calendars, pandas, yfinance" *> $null
+  if ($LASTEXITCODE -ne 0) { Write-Host "Package install failed - task NOT installed." -ForegroundColor Red; exit 1 }
 }
+$ErrorActionPreference = "Stop"
 
 $action   = New-ScheduledTaskAction -Execute $pythonw -Argument "`"$Script`"" -WorkingDirectory $Project
 $logon    = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
