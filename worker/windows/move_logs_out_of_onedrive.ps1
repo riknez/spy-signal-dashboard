@@ -55,10 +55,13 @@ Set-Content -Path (Join-Path $Destination "COPIED_FROM.txt") -Value "Copied from
 
 $envFile = Join-Path $Project ".env"
 if ($UpdateEnv) {
-  Copy-Item $envFile "$envFile.before-logdir-$(Get-Date -Format yyyyMMdd-HHmmss)"
-  $lines = Get-Content $envFile | Where-Object { $_ -notmatch '^\s*SPY_LOG_DIR\s*=' }
-  $lines + "SPY_LOG_DIR=$Destination" | Set-Content $envFile -Encoding UTF8
-  Write-Host "Set SPY_LOG_DIR=$Destination in .env (backup of the old .env saved next to it)."
+  $backupDir = Join-Path $Project "_backups"
+  New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
+  Copy-Item $envFile (Join-Path $backupDir "env.before-logdir-$(Get-Date -Format yyyyMMdd-HHmmss)")
+  $lines = @(Get-Content $envFile | Where-Object { $_ -notmatch '^\s*SPY_LOG_DIR\s*=' }) + "SPY_LOG_DIR=$Destination"
+  # UTF-8 without BOM: spy_dashboard.py reads .env as plain utf-8.
+  [IO.File]::WriteAllLines($envFile, [string[]]$lines, (New-Object Text.UTF8Encoding($false)))
+  Write-Host "Set SPY_LOG_DIR=$Destination in .env (previous .env saved in _backups)."
 } else {
   Write-Host "Next: add this line to .env (or rerun with -UpdateEnv):  SPY_LOG_DIR=$Destination"
 }
