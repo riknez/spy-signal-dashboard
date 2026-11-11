@@ -84,7 +84,22 @@ DASHBOARD_PASSWORD = ""
 # sessions end whenever the dashboard restarts.
 SESSION_COOKIE_NAME = "spy_dashboard_session"
 SESSION_TOKEN = secrets.token_urlsafe(32)
-SPY_DASHBOARD_PASSWORD = os.environ.get("SPY_DASHBOARD_PASSWORD", "scanner2026")
+# No built-in fallback password: the old default was public in the repo.
+# If SPY_DASHBOARD_PASSWORD is unset, too short, or the old default, every
+# login is refused (see do_POST /login).
+SPY_DASHBOARD_PASSWORD = os.environ.get("SPY_DASHBOARD_PASSWORD", "").strip()
+DISALLOWED_DASHBOARD_PASSWORDS = {"scanner2026"}
+MIN_DASHBOARD_PASSWORD_LENGTH = 12
+
+
+def dashboard_password_problem():
+    if not SPY_DASHBOARD_PASSWORD:
+        return "Login disabled: SPY_DASHBOARD_PASSWORD is not set in .env."
+    if SPY_DASHBOARD_PASSWORD in DISALLOWED_DASHBOARD_PASSWORDS:
+        return "Login disabled: the old default password is no longer accepted. Set a new SPY_DASHBOARD_PASSWORD in .env."
+    if len(SPY_DASHBOARD_PASSWORD) < MIN_DASHBOARD_PASSWORD_LENGTH:
+        return f"Login disabled: SPY_DASHBOARD_PASSWORD must be at least {MIN_DASHBOARD_PASSWORD_LENGTH} characters."
+    return None
 level_set_id = None
 previous_level_set_id = None
 level_set_values = None
@@ -10655,7 +10670,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             password = form.get("password", [""])[0]
 
-            if not secrets.compare_digest(password, SPY_DASHBOARD_PASSWORD):
+            password_problem = dashboard_password_problem()
+            if password_problem:
+                page = build_spy_login_page(password_problem).encode("utf-8")
+                self.send_response(503)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(page)))
+                self.end_headers()
+                self.write_response(page)
+                return
+
+            if not secrets.compare_digest(
+                password.encode("utf-8"), SPY_DASHBOARD_PASSWORD.encode("utf-8")
+            ):
                 page = build_spy_login_page("Invalid password.").encode("utf-8")
                 self.send_response(401)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -10694,12 +10722,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
         expected_token = os.environ.get("DASHBOARD_UPDATE_TOKEN", "")
         supplied_token = self.headers.get("X-Dashboard-Token", "")
 
-        if expected_token:
-            if not secrets.compare_digest(supplied_token, expected_token):
-                self.send_response(401)
-                self.end_headers()
-                self.wfile.write(b"Unauthorized")
-                return
+        # Previously an unset token meant anyone could overwrite the feed.
+        # Now an unset token disables the endpoint entirely.
+        if not expected_token:
+            self.send_response(503)
+            self.end_headers()
+            self.wfile.write(b"Push endpoint disabled: DASHBOARD_UPDATE_TOKEN not set")
+            return
+        if not secrets.compare_digest(
+            supplied_token.encode("utf-8"), expected_token.encode("utf-8")
+        ):
+            self.send_response(401)
+            self.end_headers()
+            self.wfile.write(b"Unauthorized")
+            return
 
         try:
             content_length = int(self.headers.get("Content-Length", "0"))

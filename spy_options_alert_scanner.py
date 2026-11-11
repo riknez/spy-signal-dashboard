@@ -1,6 +1,7 @@
 import csv
 import json
 import os
+import threading
 import time
 from collections import deque
 from datetime import datetime
@@ -11,6 +12,15 @@ import yfinance as yf
 
 
 SYMBOL = "SPY"
+
+EASTERN_TZ = ZoneInfo("America/New_York")
+
+
+def eastern_strftime(fmt):
+    """Log timestamps always in US/Eastern (market time), whatever the PC's
+    clock/time zone is set to. Same string format as before."""
+    return datetime.now(EASTERN_TZ).strftime(fmt)
+
 
 PRICE_HISTORY = deque(maxlen=300)
 BID_VOLUME_HISTORY = deque()
@@ -46,7 +56,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Absolute (script-relative) so the dashboard/pusher scripts always find the
 # same files regardless of what folder this scanner was launched from.
-LOG_DIR = os.path.join(BASE_DIR, "logs", "spy")
+# SPY_LOG_DIR lets the logs live outside OneDrive (see worker/README).
+# Unset = original location, so existing setups behave exactly as before.
+LOG_DIR = os.environ.get("SPY_LOG_DIR") or os.path.join(BASE_DIR, "logs", "spy")
 LOG_FILE = os.path.join(LOG_DIR, "spy_options_alerts.csv")
 SCAN_LOG_FILE = os.path.join(LOG_DIR, "spy_options_scan_log.csv")
 RESULT_LOG_FILE = os.path.join(LOG_DIR, "spy_options_alert_results.csv")
@@ -676,7 +688,7 @@ def save_live_status(spy_price, now, spy_bar_key=None):
     status = {
         "current_spy_price": round(spy_price, 4),
         "spy_price": round(spy_price, 4),
-        "last_update": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "last_update": eastern_strftime("%Y-%m-%d %H:%M:%S"),
         "update_epoch": now,
         "data_source": "yfinance fast_info + SPY 1m",
         "scanner_online": True,
@@ -697,7 +709,7 @@ def save_live_status(spy_price, now, spy_bar_key=None):
 
 def save_scan_row(spy_price, spy_change_percent):
     ensure_log_dir()
-    current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    current_time = eastern_strftime("%Y-%m-%d %H:%M:%S")
 
     file_exists = False
 
@@ -728,7 +740,7 @@ def save_scan_row(spy_price, spy_change_percent):
 
 def save_alert(direction, option_type, spy_price, spy_change_percent):
     ensure_log_dir()
-    current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    current_time = eastern_strftime("%Y-%m-%d %H:%M:%S")
     file_exists = ensure_csv_header(LOG_FILE, ALERT_HEADERS)
 
     with open(LOG_FILE, "a", newline="") as file:
@@ -777,7 +789,7 @@ def calculate_engine_summary(rows):
 
 def save_engine_health_rows(rows):
     ensure_log_dir()
-    current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    current_time = eastern_strftime("%Y-%m-%d %H:%M:%S")
     file_exists = os.path.exists(ENGINE_HEALTH_LOG_FILE)
 
     with open(ENGINE_HEALTH_LOG_FILE, "a", newline="") as file:
@@ -878,7 +890,7 @@ def calculate_market_breadth(etf_rows, stock_rows):
 
 def save_market_breadth(etf_rows, breadth):
     ensure_log_dir()
-    current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    current_time = eastern_strftime("%Y-%m-%d %H:%M:%S")
     file_exists = os.path.exists(MARKET_BREADTH_LOG_FILE)
     etf_changes = {
         row["ticker"]: row["day_change_percent"]
@@ -1419,7 +1431,7 @@ def build_confirmation_levels(
         "bearish_trigger": bearish_levels[0],
         "bearish_confirmation": bearish_levels[1],
         "bearish_breakdown": bearish_levels[2],
-        "level_update_time": time.strftime("%I:%M:%S %p"),
+        "level_update_time": eastern_strftime("%I:%M:%S %p"),
         "structure_update_epoch": structure_update_epoch,
         "level_update_epoch": now_epoch,
         "levels_corrected": "TRUE" if levels_corrected else "FALSE"
@@ -2405,7 +2417,7 @@ def ensure_prediction_log_headers():
 def save_prediction_row(spy_price, prediction_data):
     ensure_log_dir()
     ensure_prediction_log_headers()
-    current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    current_time = eastern_strftime("%Y-%m-%d %H:%M:%S")
     file_exists = os.path.exists(PREDICTION_LOG_FILE)
     invalid_level = prediction_data["invalid_level"]
 
@@ -2669,7 +2681,7 @@ def save_result_row(
     result
 ):
     ensure_log_dir()
-    current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    current_time = eastern_strftime("%Y-%m-%d %H:%M:%S")
     file_exists = ensure_result_log_file()
 
     with open(RESULT_LOG_FILE, "a", newline="") as file:
@@ -2716,7 +2728,7 @@ def save_a_plus_result_row(
         if not file_exists:
             writer.writerow(RESULT_HEADERS)
         writer.writerow([
-            time.strftime("%Y-%m-%d %H:%M:%S"),
+            eastern_strftime("%Y-%m-%d %H:%M:%S"),
             option_type,
             f"{entry_spy_price:.4f}",
             f"{price_after_30s:.4f}",
@@ -2827,6 +2839,33 @@ def track_alert_result(option_type, entry_spy_price, a_plus_setup="YES"):
     )
 
 
+# The original track_alert_result() sleeps 30s + 30s + 60s inside the main
+# loop, freezing price updates and live status for ~2 minutes after every
+# alert. The same function now runs on a background thread instead: identical
+# 30/60/120s samples, identical WIN/LOSS/FLAT rules, identical CSV rows.
+# RESULT_TRACKING_SECONDS is used by the main loop to keep the same alert
+# spacing the blocking version produced (tracking window + cooldown).
+RESULT_TRACKING_SECONDS = 120
+_RESULT_TRACKING_LOCK = threading.Lock()
+
+
+def track_alert_result_async(option_type, entry_spy_price, a_plus_setup="YES"):
+    def _run():
+        try:
+            with _RESULT_TRACKING_LOCK:
+                track_alert_result(option_type, entry_spy_price, a_plus_setup)
+        except Exception as error:
+            print(f"Background {option_type} result tracking failed: {error}")
+
+    worker = threading.Thread(
+        target=_run,
+        name=f"track-{option_type}-{int(time.time())}",
+        daemon=True,
+    )
+    worker.start()
+    return worker
+
+
 # ---------------------------------------------------------------------------
 # SPY runtime + CALL/PUT signal performance tracking (SPY price only).
 #
@@ -2861,7 +2900,7 @@ def append_runtime_heartbeat(spy_price, now, current_signal):
         if not file_exists:
             writer.writerow(RUNTIME_HEARTBEAT_HEADERS)
         writer.writerow([
-            time.strftime("%Y-%m-%d %H:%M:%S"),
+            eastern_strftime("%Y-%m-%d %H:%M:%S"),
             f"{now:.3f}",
             f"{spy_price:.4f}",
             current_signal
@@ -2879,7 +2918,7 @@ def calculate_runtime_hours(now):
 
     first_epoch = None
     today_first_epoch = None
-    today_key = datetime.now().strftime("%Y-%m-%d")
+    today_key = eastern_strftime("%Y-%m-%d")
 
     for row in read_csv_rows_safe(RUNTIME_HEARTBEAT_FILE):
         try:
@@ -2918,7 +2957,7 @@ def log_spy_signal_event(direction, entry_spy_price, confidence, market_regime, 
             writer.writerow(SIGNAL_EVENT_HEADERS)
         writer.writerow([
             signal_id,
-            time.strftime("%Y-%m-%d %H:%M:%S"),
+            eastern_strftime("%Y-%m-%d %H:%M:%S"),
             f"{now:.3f}",
             direction,
             f"{entry_spy_price:.4f}",
@@ -2957,7 +2996,7 @@ def save_spy_signal_result(
             writer.writerow(SIGNAL_RESULT_HEADERS)
         writer.writerow([
             signal_id,
-            time.strftime("%Y-%m-%d %H:%M:%S"),
+            eastern_strftime("%Y-%m-%d %H:%M:%S"),
             f"{now:.3f}",
             direction,
             f"{entry_spy_price:.4f}",
@@ -3079,7 +3118,7 @@ def update_spy_performance_summary(now):
     runtime_hours, today_runtime_hours = calculate_runtime_hours(now)
 
     summary = {
-        "last_update": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "last_update": eastern_strftime("%Y-%m-%d %H:%M:%S"),
         "runtime_hours": runtime_hours,
         "today_runtime_hours": today_runtime_hours,
         "total_signals": total_signals,
@@ -3396,9 +3435,11 @@ while True:
                 alert_allowed_count += 1
                 last_alert_time = time.time()
 
-                track_alert_result("CALL", spy_price, "YES")
+                track_alert_result_async("CALL", spy_price, "YES")
 
-                last_alert_time = time.time()
+                # Same spacing as before: the blocking tracker returned ~120s
+                # after the alert and the cooldown started then.
+                last_alert_time = time.time() + RESULT_TRACKING_SECONDS
 
             elif (
                 spy_change <= -SPY_MOVE_ALERT_PERCENT
@@ -3472,9 +3513,11 @@ while True:
                 alert_allowed_count += 1
                 last_alert_time = time.time()
 
-                track_alert_result("PUT", spy_price, "YES")
+                track_alert_result_async("PUT", spy_price, "YES")
 
-                last_alert_time = time.time()
+                # Same spacing as before: the blocking tracker returned ~120s
+                # after the alert and the cooldown started then.
+                last_alert_time = time.time() + RESULT_TRACKING_SECONDS
 
         time.sleep(SPY_POLL_SECONDS)
 
