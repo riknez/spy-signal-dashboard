@@ -1,0 +1,99 @@
+/* Argus SPY Signal Desk — scoped to .argus-spy so the theme is untouched. */
+.argus-spy {
+	--bg: #0b0f14; --panel: #121821; --panel2: #18202b; --line: #232d3a;
+	--ink: #e6edf3; --mute: #8b98a8; --call: #2fbf71; --put: #f0524f; --wait: #e8b13a;
+	--accent: #5aa9ff; --vwap: #c792ea;
+	background: var(--bg); color: var(--ink); border-radius: 14px; padding: 18px;
+	font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+	font-variant-numeric: tabular-nums; max-width: 1280px; margin: 0 auto; box-sizing: border-box;
+	container-type: inline-size; container-name: argusspy;
+}
+.argus-spy *, .argus-spy *::before, .argus-spy *::after { box-sizing: border-box; }
+.argus-spy h2, .argus-spy p, .argus-spy dl, .argus-spy ul { margin: 0; }
+.as-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.as-brand { display: flex; gap: 12px; align-items: center; }
+.as-mark { width: 12px; height: 34px; border-radius: 3px; background: linear-gradient(var(--call), var(--accent)); }
+.as-title { font-size: 18px; font-weight: 650; letter-spacing: .2px; color: var(--ink); }
+.as-sub { color: var(--mute); font-size: 12px; }
+.as-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.as-pill { padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--panel2); border: 1px solid var(--line); }
+.as-pill-quiet { font-weight: 500; color: var(--mute); }
+.as-pill.is-live { color: var(--call); border-color: color-mix(in srgb, var(--call) 50%, transparent); }
+.as-pill.is-live::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--call); margin-right: 6px; animation: as-pulse 1.6s infinite; }
+.as-pill.is-stale { color: var(--wait); border-color: var(--wait); }
+.as-pill.is-off { color: var(--put); border-color: var(--put); }
+.as-pill.is-hist { color: var(--accent); }
+@keyframes as-pulse { 50% { opacity: .3; } }
+.as-banner { margin-bottom: 12px; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--wait) 14%, var(--panel)); border: 1px solid color-mix(in srgb, var(--wait) 45%, transparent); font-size: 13px; }
+.as-banner.is-bad { background: color-mix(in srgb, var(--put) 14%, var(--panel)); border-color: color-mix(in srgb, var(--put) 50%, transparent); }
+.as-tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.as-tabs button { background: none; border: 0; color: var(--mute); padding: 9px 12px; font: inherit; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
+.as-tabs button.is-on { color: var(--ink); border-bottom-color: var(--accent); }
+.as-tabs button:focus-visible, .as-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.as-grid { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.as-grid-2 { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+.as-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; min-width: 0; }
+.as-chart-card { grid-column: span 2; }
+.as-wide { grid-column: 1 / -1; }
+.as-label { color: var(--mute); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px; }
+.as-label small { text-transform: none; letter-spacing: 0; font-weight: 500; margin-left: 6px; }
+.as-mt { margin-top: 12px; }
+.as-call { font-size: 44px; font-weight: 800; letter-spacing: 1px; line-height: 1; }
+.as-call.is-CALL { color: var(--call); } .as-call.is-PUT { color: var(--put); } .as-call.is-WAIT { color: var(--wait); }
+.as-price { margin: 8px 0 10px; font-size: 22px; font-weight: 650; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.as-price small { font-size: 12px; color: var(--mute); font-weight: 500; }
+.as-meter { height: 6px; background: var(--panel2); border-radius: 6px; overflow: hidden; }
+.as-meter span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+.as-meta { margin-top: 6px; font-weight: 600; }
+.as-fine { color: var(--mute); font-size: 12px; margin-top: 6px; }
+.as-kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin-top: 10px; font-size: 13px; }
+.as-kv dt { color: var(--mute); }
+.as-kv dd { margin: 0; text-align: right; font-weight: 600; overflow-wrap: anywhere; }
+.as-why { margin-top: 10px; font-size: 12.5px; color: var(--mute); }
+.as-why summary { cursor: pointer; color: var(--ink); font-weight: 600; }
+.as-why p { margin-top: 6px; }
+.as-chart { width: 100%; height: 220px; display: block; background: linear-gradient(var(--panel), var(--panel2)); border-radius: 8px; }
+.as-chart-tall { height: 260px; margin-top: 10px; }
+.as-chart .grid { stroke: var(--line); stroke-width: 1; }
+.as-chart .price { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.as-chart .vwap { fill: none; stroke: var(--vwap); stroke-width: 1.5; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; }
+.as-chart text { fill: var(--mute); font-size: 11px; }
+.as-chart .m-CALL { fill: var(--call); } .as-chart .m-PUT { fill: var(--put); }
+.as-legend { display: flex; gap: 14px; align-items: center; color: var(--mute); font-size: 12px; margin-top: 8px; flex-wrap: wrap; }
+.as-legend i { display: inline-block; width: 14px; height: 3px; margin-right: -8px; border-radius: 2px; }
+.l-price { background: var(--accent); } .l-vwap { background: var(--vwap); } .l-call { background: var(--call); } .l-put { background: var(--put); }
+.as-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.as-chip { padding: 3px 8px; border-radius: 6px; background: var(--panel2); border: 1px solid var(--line); font-size: 12px; font-weight: 600; }
+.as-chip.is-CALL { color: var(--call); } .as-chip.is-PUT { color: var(--put); }
+.as-factors { list-style: none; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.as-factors li { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; border-bottom: 1px dashed var(--line); }
+.as-factors b.is-CALL { color: var(--call); } .as-factors b.is-PUT { color: var(--put); } .as-factors b.is-NEUTRAL, .as-factors b.is-WAIT { color: var(--mute); }
+.as-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.as-table th { text-align: left; color: var(--mute); font-weight: 600; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.as-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.as-compact td { padding: 4px 6px; }
+.as-table .pos { color: var(--call); } .as-table .neg { color: var(--put); }
+.as-scroll { overflow-x: auto; }
+.as-statrow { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 12px 0; }
+.as-stat { background: var(--panel2); border-radius: 10px; padding: 10px; }
+.as-stat b { display: block; font-size: 20px; }
+.as-stat span { color: var(--mute); font-size: 12px; }
+.as-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
+.as-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--mute); margin-bottom: 8px; flex: 1 1 120px; }
+.argus-spy input, .argus-spy select, .argus-spy textarea { background: var(--panel2); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; min-width: 0; }
+.as-btn { background: var(--accent); color: #04121f; border: 0; border-radius: 8px; padding: 10px 14px; font-weight: 700; cursor: pointer; }
+.as-link { background: none; border: 0; color: var(--put); cursor: pointer; font: inherit; }
+.as-risk p { color: var(--mute); }
+.as-foot { color: var(--mute); font-size: 12px; margin-top: 14px; text-align: center; }
+.argus-spy-gate { padding: 24px; border: 1px solid #ddd; border-radius: 10px; text-align: center; }
+/* Layout follows the dashboard's own width (themes give it very different
+   column widths), not the window width. */
+@container argusspy (max-width: 980px) { .as-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .as-grid-2 { grid-template-columns: 1fr; } }
+@container argusspy (max-width: 700px) {
+	.as-grid { grid-template-columns: 1fr; }
+	.as-chart-card { grid-column: auto; }
+	.as-call { font-size: 38px; }
+	.as-chart { height: 180px; }
+}
+@media (max-width: 640px) { .argus-spy { padding: 12px; border-radius: 0; } }
+@media (prefers-reduced-motion: reduce) { .as-pill.is-live::before { animation: none; } .as-meter span { transition: none; } }
