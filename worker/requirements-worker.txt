@@ -1,0 +1,7 @@
+# Scanner worker (cloud). Existing scanner deps + NYSE calendar.
+yfinance
+pandas
+numpy
+requests
+certifi
+exchange_calendars
