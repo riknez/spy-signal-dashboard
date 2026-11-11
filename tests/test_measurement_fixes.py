@@ -56,6 +56,20 @@ def test_volume_uses_last_completed_bar_not_in_progress_bar(tmp_path):
     assert m.MIN_1M_BID_TOTAL == 200                  # threshold unchanged
 
 
+def test_volume_skips_just_closed_bar_yahoo_has_not_filled(tmp_path):
+    m = load(str(tmp_path))
+    data = bars([41000, 52000, 0, 0], pd.Timestamp("2026-11-11 10:16", tz=ET))   # 10:15 closed but still 0
+    m.record_last_completed_1m_bar(data, now_ts=pd.Timestamp("2026-11-11 10:16:02", tz=ET))
+    assert m.update_rolling_bid_volume(0, "x", 0)[:1] == (52000.0,)
+
+
+def test_volume_too_old_counts_as_missing(tmp_path):
+    m = load(str(tmp_path))
+    data = bars([41000, 0, 0, 0, 0], pd.Timestamp("2026-11-11 10:16", tz=ET))
+    m.record_last_completed_1m_bar(data, now_ts=pd.Timestamp("2026-11-11 10:16:30", tz=ET))
+    assert m.update_rolling_bid_volume(0, "x", 0)[2] == "FAIL"
+
+
 def test_volume_genuinely_zero_still_fails(tmp_path):
     m = load(str(tmp_path))
     m.record_last_completed_1m_bar(bars([0, 0], pd.Timestamp("2026-11-11 10:15", tz=ET)),

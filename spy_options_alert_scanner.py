@@ -557,12 +557,20 @@ def record_last_completed_1m_bar(data, now_ts=None):
         if index.tz is None:
             index = index.tz_localize(EASTERN_TZ)
         complete = (index + pd.Timedelta(minutes=1)) <= now_ts
-        if complete.any():
-            position = int(complete.nonzero()[0][-1])
-            LAST_COMPLETED_1M_BAR = (
-                str(data.index[position]),
-                float(data["Volume"].iloc[position]),
-            )
+        # Yahoo often reports 0 for a bar that closed seconds ago and fills
+        # it in shortly after, so use the newest completed bar that has its
+        # volume, as long as it closed within the last 3 minutes.
+        recent = complete & ((index + pd.Timedelta(minutes=4)) > now_ts)
+        volumes = data["Volume"].to_numpy()
+        chosen = None
+        for position in reversed(recent.nonzero()[0]):
+            if float(volumes[position]) > 0:
+                chosen = int(position)
+                break
+        if chosen is not None:
+            LAST_COMPLETED_1M_BAR = (str(data.index[chosen]), float(volumes[chosen]))
+        else:
+            LAST_COMPLETED_1M_BAR = (None, 0.0)
     except Exception as error:
         print("Could not read completed 1m bar volume:", error)
 

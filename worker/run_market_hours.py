@@ -76,6 +76,48 @@ def keep_awake(on: bool) -> None:
         log(f"keep-awake call failed: {err}")
 
 
+_JOB = None
+
+
+def kill_children_with_supervisor(pid: int) -> None:
+    """Windows: put child processes in a Job Object that is closed when the
+    supervisor exits, so ending the scheduled task also ends the scanner
+    (no orphaned scanner writing to the same files)."""
+    global _JOB
+    if not IS_WINDOWS:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.windll.kernel32
+        if _JOB is None:
+            _JOB = k32.CreateJobObjectW(None, None)
+
+            class BASIC(ctypes.Structure):
+                _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                            ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                            ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                            ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                            ("SchedulingClass", wintypes.DWORD)]
+
+            class IOC(ctypes.Structure):
+                _fields_ = [(n, ctypes.c_uint64) for n in ("r", "w", "o", "rb", "wb", "ob")]
+
+            class EXT(ctypes.Structure):
+                _fields_ = [("Basic", BASIC), ("Io", IOC), ("ProcessMemoryLimit", ctypes.c_size_t),
+                            ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                            ("PeakJobMemoryUsed", ctypes.c_size_t)]
+            info = EXT()
+            info.Basic.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            k32.SetInformationJobObject(_JOB, 9, ctypes.byref(info), ctypes.sizeof(info))
+        handle = k32.OpenProcess(0x0001 | 0x0100, False, pid)  # TERMINATE | SET_QUOTA
+        if handle:
+            k32.AssignProcessToJobObject(_JOB, handle)
+            k32.CloseHandle(handle)
+    except Exception as err:
+        log(f"job-object setup failed (children may outlive supervisor): {err}")
+
+
 class Child:
     def __init__(self, name: str, args: list[str]):
         self.name, self.args = name, args
@@ -92,6 +134,7 @@ class Child:
         if IS_WINDOWS:
             kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | 0x08000000  # no window
         self.proc = subprocess.Popen([sys.executable, "-u", *self.args], **kwargs)
+        kill_children_with_supervisor(self.proc.pid)
         log(f"started {self.name} (pid {self.proc.pid})")
 
     def stop(self) -> None:
